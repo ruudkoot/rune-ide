@@ -1,0 +1,42 @@
+{
+  "name": "rune-ide",
+  "productName": "Rune",
+  "version": "0.1.0",
+  "description": "An IDE for Standard ML, powered by Rune",
+  "private": true,
+  "main": ".webpack/main",
+  "author": "Ruud Koot",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "typecheck": "tsc --noEmit",
+    "test:service": "node --test tests/service.test.cjs",
+    "test:ui": "playwright test",
+    "test": "npm run typecheck && npm run test:service"
+  },
+  "dependencies": {
+    "dockview-react": "8.3.1",
+    "monaco-editor": "0.57.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-aria-components": "1.21.1"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "7.11.2",
+    "@electron-forge/plugin-webpack": "7.11.2",
+    "@electron-forge/shared-types": "7.11.2",
+    "@playwright/test": "1.63.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "css-loader": "^7.1.2",
+    "electron": "44.4.5",
+    "monaco-editor-webpack-plugin": "7.1.1",
+    "style-loader": "^4.0.0",
+    "ts-loader": "^9.5.2",
+    "typescript": "5.9.3",
+    "webpack": "^5.99.0"
+  }
+}

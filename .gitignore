@@ -1,0 +1,9 @@
+node_modules/
+.tools/
+.webpack/
+build/
+out/
+test-results/
+playwright-report/
+*.log
+.cm/
