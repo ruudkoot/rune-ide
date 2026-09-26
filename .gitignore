@@ -8,3 +8,4 @@ playwright-report/
 *.log
 .cm/
 .rune-ide/
+__pycache__/

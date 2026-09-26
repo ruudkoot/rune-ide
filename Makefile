@@ -3,11 +3,13 @@ export RUNE_ROOT
 unexport ELECTRON_RUN_AS_NODE
 export PATH := $(CURDIR)/.tools/node_modules/node/bin:$(PATH)
 
-.PHONY: setup service compiler dev check check-hosts package test-ui
+.PHONY: setup millet service compiler dev check check-hosts package test-ui
 setup:
 	npm install --prefix .tools --no-package-lock --no-audit --no-fund node@24
 	npm ci
-service:
+millet:
+	python3 scripts/gen-build-files.py
+service: millet
 	python3 scripts/build-service.py
 compiler:
 	python3 scripts/build-compiler.py

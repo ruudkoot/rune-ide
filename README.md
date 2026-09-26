@@ -10,6 +10,7 @@ toolchain/source input; changing it requires permission. Its existing
 
 ```sh
 make setup                 # install a local Node 24 and locked dependencies
+make millet                # generate Millet's MLB for service, compiler adapter and example
 make dev                   # compile the SML service and launch the IDE
 make check                 # service/compiler, TypeScript and process integration tests
 make check-hosts           # same service on MLton, Poly/ML, SML/NJ 64 and 32 bits
@@ -19,6 +20,12 @@ make test-ui               # package and exercise the actual Electron applicatio
 Set `RUNE_ROOT=/path/to/rune` to use another toolchain. These commands write
 only to this repository. `make setup` needs npm and network access; build
 scripts need Python 3. UI tests require a working graphical display.
+
+Millet reads `millet.toml`, which points to the generated `build/ide.mlb`.
+Run `make millet` after changing either source manifest or `RUNE_ROOT`;
+`make service` also regenerates it. The service, compiler adapter, and example
+have separate MLB scopes. Generation reads Rune's existing sources and
+`build/config.sml` without modifying that checkout.
 
 Start the packaged Linux app with:
 

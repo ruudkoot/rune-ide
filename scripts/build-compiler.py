@@ -1,16 +1,13 @@
 """Compile a diagnostic adapter against Rune sources, with all output here."""
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
+from sml_sources import root, rune, manifest, compiler_sources
 
-root = Path(__file__).resolve().parents[1]
-rune = Path(os.environ.get('RUNE_ROOT', '/home/ruud/rune')).resolve()
 build = root / 'build'
 build.mkdir(exist_ok=True)
-sources = [rune / s.strip() for s in (rune / 'sources.txt').read_text().splitlines()
-           if s.strip() and not s.lstrip().startswith('#')]
+sources = manifest(rune)
 inputs = [rune / 'build/config.sml', *sources, rune / 'lib/basis/MANIFEST',
           *sorted((rune / 'lib/basis').glob('*.sml')), rune / 'bin/rune.rbc']
 def digest():
@@ -21,18 +18,14 @@ def digest():
 identity = digest()
 metadata = build / 'compiler-info.json'
 output = build / 'compiler.rbc'
-adapter_files = [Path(__file__), root / 'src/sml/utf8.sml', root / 'src/sml/json.sml',
+adapter_files = [Path(__file__), root / 'scripts/sml_sources.py', root / 'src/sml/utf8.sml', root / 'src/sml/json.sml',
                  root / 'src/compiler/diagnostics.sml', root / 'src/compiler/main.sml']
 adapter_hash = hashlib.sha256(b''.join(p.read_bytes() for p in adapter_files)).hexdigest()
 if output.exists() and metadata.exists():
     cached = json.loads(metadata.read_text())
     if cached.get('sourcesSha256') == identity and cached.get('adapterSha256') == adapter_hash:
         print('Compiler adapter is current'); raise SystemExit(0)
-ordered = [rune / 'build/config.sml', root / 'src/sml/utf8.sml', root / 'src/sml/json.sml']
-for source in sources:
-    ordered.append(source)
-    if source == rune / 'src/util/error.sml': ordered.append(root / 'src/compiler/diagnostics.sml')
-ordered.append(root / 'src/compiler/main.sml')
+ordered = compiler_sources()
 temporary = build / 'compiler.new.rbc'
 subprocess.run([str(rune / 'bin/rune'), '-o', str(temporary), *map(str, ordered)], cwd=root, check=True)
 if digest() != identity:
