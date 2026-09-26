@@ -30,5 +30,26 @@ application requests, folder selection, and service status subscriptions;
 the renderer cannot request arbitrary processes or raw IPC channels. Request
 IDs and transport sequencing are host details. SML returns the domain data.
 
-M2 adds document revisions and UTF-16 edit offsets. M3 adds build identities
-and diagnostics; these methods are not implemented by version 1's M1 service.
+## Documents (M2)
+
+| Method | Parameters | Result |
+|---|---|---|
+| `document/open` | `{path}` | `{path, text, bom, revision, dirty}` |
+| `document/change` | `{path, revision, changes: [{offset, length, text}]}` | `{path, revision, dirty}` |
+| `document/save` | `{path, revision}` | `{path, revision, dirty}` |
+| `document/close` | `{path, revision, discard?: boolean}` | `null` |
+| `document/list` | `{}` | `{path, revision, dirty}[]` |
+
+Open returns the canonical path, BOM-free text and revision 0 on first load;
+opening it again returns the current buffer. Revisions increment on accepted
+changes. Edit offsets and lengths count UTF-16 units in the old document,
+including CRLF as two units. Changes may arrive in any order, must not overlap,
+and cannot split a surrogate pair. A rejected batch leaves text/revision intact.
+
+Save requires the acknowledged revision and unchanged disk bytes. Close rejects
+dirty documents unless `discard` is true. Workspace changes reject unsaved
+buffers. Document policy errors use `-32020`; filesystem errors use `-32000`.
+The renderer serializes edits/saves per document and retains its buffer after
+errors. A UI unsaved indicator can be optimistic while an edit is in flight.
+
+M3 adds build identities and diagnostics.

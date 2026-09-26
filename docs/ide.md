@@ -24,7 +24,7 @@ first. Hidden files and common generated directories are excluded by
 default. Symlinks are displayed but the frontend does not expand directory
 links. Individual directory failures appear in Output. The initial UI
 supports one workspace/window, with dockable Explorer and Output and a
-read-only welcome editor. Actual document editing is M2.
+welcome editor. M2 adds document tabs and shared split views.
 
 Frontend package versions are locked. The build uses Electron Forge's
 Webpack integration, with only the Monaco editor API and find contribution
@@ -43,3 +43,32 @@ When changing the application, run the checks relevant to the milestone,
 update behavior/protocol documentation and the roadmap, then commit that
 milestone. Do not run builds/tests that mutate `/home/ruud/rune` without
 the owner's permission.
+
+## Editing (M2)
+
+Open existing UTF-8 text files with Enter or a double click. The tree's Show
+Excluded checkbox includes dotfiles and generated directories; Refresh reloads
+expanded directories while retaining selection. Tabs use paths relative to the
+workspace, so duplicate basenames are distinguishable. Split Editor creates
+another view of the same Monaco model and undo history. Find/replace is Monaco's
+Ctrl+F / Ctrl+H. File/View menus also expose the editing commands.
+
+The SML service owns document text, revisions and dirty state. Monaco sends
+simultaneous edits in UTF-16 units; SML validates the revision and converts to
+UTF-8 byte offsets. Native Save/Discard/Cancel prompts protect closing a dirty
+file, changing workspace and quitting. A failed edit acknowledgement retains
+the local buffer and blocks saves instead of silently desynchronizing it.
+
+Save and Save All preserve a UTF-8 BOM, uniform LF/CRLF endings, and POSIX
+permissions. A save compares current disk bytes with the last loaded/saved
+version, writes an exclusive temporary sibling, flushes it, checks disk again,
+and renames the sibling into place. Failed saves retain the dirty buffer.
+This is Linux replacement behavior, not a promise of crash durability or a
+lock against another writer racing the final check. ACLs, extended attributes,
+hard-link identity, Windows replacement semantics and file watchers are M4 work.
+
+Files larger than 512 KiB, non-UTF-8 data, binary/control characters, mixed
+line endings and lone-CR text are explicitly rejected in this first editor.
+The buffer remains in memory until the application exits; crash recovery and
+session restoration are M4 work. New file creation and rename are also follow-ups.
+Tests edit temporary fixtures; the Rune checkout remains read-only.

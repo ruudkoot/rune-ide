@@ -12,8 +12,14 @@ struct
     else case method of
       "ping" => params
     | "shutdown" => (stopping := true; Json.Null)
-    | "workspace/open" => Workspace.openFolder (Json.getString params "path")
+    | "workspace/open" => (Documents.requireClean ();
+        let val result = Workspace.openFolder (Json.getString params "path") in Documents.reset (); result end)
     | "workspace/list" => Workspace.listDirectory (Json.getString params "path", Json.field params "showExcluded" = Json.Bool true)
+    | "document/open" => Documents.openFile (Json.getString params "path")
+    | "document/change" => Documents.change params
+    | "document/save" => Documents.save params
+    | "document/close" => Documents.closeFile params
+    | "document/list" => Documents.list ()
     | _ => raise Rpc (~32601, "unknown method: " ^ method)
   fun result id v = Json.Object [("jsonrpc", Json.String "2.0"), ("id", id), ("result", v)]
   fun error id code message = Json.Object [("jsonrpc", Json.String "2.0"), ("id", id), ("error", Json.Object [("code", Json.int code), ("message", Json.String message)])]
@@ -27,6 +33,7 @@ struct
        | Json.Invalid m => error id (~32602) m
        | Utf8.Invalid m => error id (~32602) m
        | Workspace.Invalid m => error id (~32010) m
+       | Documents.Invalid m => error id (~32020) m
        | e => error id (~32000) (General.exnMessage e)
     end
   val maxLine = 4 * 1024 * 1024

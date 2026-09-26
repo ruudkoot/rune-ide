@@ -19,7 +19,7 @@ in isolation do not complete a milestone.
 |---|---|---|---|
 | M0 | This roadmap and the stack decision | — | planned and documented |
 | M1 | Desktop shell connected to an SML service | M0 | complete on Linux |
-| M2 | File browser and source editor | M1 | not started |
+| M2 | File browser and source editor | M1 | complete on Linux |
 | M3 | Rune compilation with structured IDE feedback | M2 | not started |
 | M4 | Reliable daily editing, recovery, and distribution | M3 | not started |
 | M5 | Shared SML presentation logic and interactive compiler services | M3; incremental interfaces where available | not started |
@@ -361,7 +361,8 @@ required for this demonstration.
 - Provide Refresh and external-change checks before saving. Automatic file
   notifications are M4 work. Handle unsupported files explicitly.
 
-**Acceptance:** open Rune's checkout, expand `src`, edit/save SML, split its
+**Acceptance:** browse Rune's checkout read-only; in a temporary workspace,
+expand source directories, edit/save SML, split its
 editor, close/reopen it, and verify the file bytes. Undo/redo survive tab
 switches and layout changes. Cover duplicate basenames, spaces/Unicode in
 paths, CRLF, emoji in comments/strings, symlink loops, unreadable folders,

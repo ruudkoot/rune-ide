@@ -6,7 +6,8 @@ declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 let service: ServiceClient;
 let window: BrowserWindow;
 let quitting = false;
-const methods = new Set(['ping', 'workspace/open', 'workspace/list']);
+let acceptedClose = false;
+const methods = new Set(['ping', 'workspace/open', 'workspace/list', 'document/open', 'document/change', 'document/save', 'document/close', 'document/list']);
 
 app.whenReady().then(() => {
   const runeRoot = process.env.RUNE_ROOT || '/home/ruud/rune';
@@ -16,6 +17,9 @@ app.whenReady().then(() => {
     webPreferences: { preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY, contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.on('close', (event) => {
+    if (!acceptedClose) { event.preventDefault(); window.webContents.send('rune:command', 'quit'); }
+  });
   window.webContents.on('will-navigate', (event, url) => { if (url !== window.webContents.getURL()) event.preventDefault(); });
   service.on('status', (status) => { if (!window.isDestroyed()) window.webContents.send('rune:status', status); });
   const checkSender = (event: Electron.IpcMainInvokeEvent) => {
@@ -33,14 +37,33 @@ app.whenReady().then(() => {
     return result.canceled ? null : result.filePaths[0];
   });
   ipcMain.handle('rune:status', (event) => { checkSender(event); return service.status; });
+  ipcMain.handle('rune:confirm-unsaved', async (event, file: unknown) => {
+    checkSender(event);
+    if (typeof file !== 'string') throw new Error('Expected document path');
+    const result = await dialog.showMessageBox(window, { type: 'question', message: `Save changes to ${path.basename(file)}?`, detail: file, buttons: ['Save', 'Discard', 'Cancel'], defaultId: 0, cancelId: 2, noLink: true });
+    return ['save', 'discard', 'cancel'][result.response];
+  });
+  ipcMain.handle('rune:finish-close', (event) => { checkSender(event); acceptedClose = true; app.quit(); });
+  const command = (name: string) => () => window.webContents.send('rune:command', name);
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: 'File', submenu: [{ role: 'quit' }] },
+    { label: 'File', submenu: [
+      { label: 'Open Folder…', accelerator: 'CmdOrCtrl+O', click: command('open-folder') },
+      { label: 'Save', accelerator: 'CmdOrCtrl+S', click: command('save') },
+      { label: 'Save All', accelerator: 'CmdOrCtrl+Shift+S', click: command('save-all') },
+      { label: 'Close Editor', accelerator: 'CmdOrCtrl+W', click: command('close') },
+      { role: 'quit' },
+    ] },
     { role: 'editMenu' },
-    { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }] },
+    { label: 'View', submenu: [
+      { label: 'Split Editor', accelerator: 'CmdOrCtrl+\\', click: command('split') },
+      { label: 'Reveal Active File', click: command('reveal') },
+      { role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
+    ] },
   ]));
   void window.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 });
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', (event) => {
-  if (!quitting && service) { event.preventDefault(); quitting = true; void service.close().finally(() => app.quit()); }
+  if (!acceptedClose && window && !window.isDestroyed()) { event.preventDefault(); window.webContents.send('rune:command', 'quit'); }
+  else if (!quitting && service) { event.preventDefault(); quitting = true; void service.close().finally(() => app.quit()); }
 });

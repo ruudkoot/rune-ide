@@ -27,3 +27,64 @@ test('packaged workbench connects to SML and opens a real workspace', async () =
     await expect(page.locator('.error-banner')).toContainText('SML service exited');
   } finally { await app.close(); }
 });
+
+test('edit, save, split, undo, conflict and cancel a dirty close', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os');
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'rune-ui λ '));
+  const file = path.join(folder, 'hello λ.sml');
+  fs.writeFileSync(file, '\ufeffval x = 1\r\n'); fs.mkdirSync(path.join(folder, 'nested'));
+  fs.writeFileSync(path.join(folder, 'nested', 'hello λ.sml'), 'val other = 2\n');
+  const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  delete env.ELECTRON_RUN_AS_NODE;
+  const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
+  try {
+    const page = await app.firstWindow();
+    const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+    await expect(page.getByText('SML service connected')).toBeVisible();
+    await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, folder);
+    await page.getByRole('button', { name: 'Open folder', exact: true }).first().click();
+    await page.getByText('hello λ.sml', { exact: true }).click(); await page.keyboard.press('Enter');
+    const editor = page.getByRole('textbox', { name: 'Source editor ' + file, exact: true });
+    await expect(page.locator('[data-document] .monaco-editor')).toBeVisible(); await editor.focus(); await page.keyboard.press('Control+End');
+    await page.keyboard.insertText('(* 🙂 edited *)');
+    await expect(page.getByText('1 unsaved · Rune')).toBeVisible();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect.poll(() => fs.readFileSync(file, 'utf8')).toBe('\ufeffval x = 1\r\n(* 🙂 edited *)');
+    await page.getByRole('row', { name: 'nested', exact: true }).click();
+    await page.keyboard.press('ArrowRight');
+    await page.getByRole('row', { name: 'hello λ.sml', exact: true }).first().dblclick();
+    await expect(page.getByRole('tab', { name: 'nested/hello λ.sml', exact: true })).toBeVisible();
+    await page.getByRole('tab', { name: 'hello λ.sml', exact: true }).click();
+    await page.getByRole('button', { name: 'Split editor', exact: true }).click();
+    await expect(editor).toHaveCount(2);
+    await editor.last().focus(); await page.keyboard.press('Control+End'); await page.keyboard.insertText('!');
+    await page.keyboard.press('Control+z');
+    await expect(page.getByText('0 unsaved · Rune')).toBeVisible();
+    await page.getByRole('button', { name: /Close hello λ.sml/ }).last().click();
+    await expect(editor).toHaveCount(1);
+    await editor.focus(); await page.keyboard.press('Control+End'); await page.keyboard.insertText('changed');
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 2, checkboxChecked: false }); });
+    await page.getByRole('button', { name: /Close hello λ.sml/ }).click();
+    await expect(editor).toBeAttached();
+    fs.writeFileSync(file, 'val external = 99\n');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.locator('.output .error')).toContainText('changed on disk');
+    expect(fs.readFileSync(file, 'utf8')).toBe('val external = 99\n');
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
+    await page.getByRole('button', { name: /Close hello λ.sml/ }).click();
+    await expect(editor).toHaveCount(0);
+    await page.getByRole('row', { name: 'hello λ.sml', exact: true }).last().dblclick();
+    await expect(editor).toHaveCount(1);
+    const doc = await page.evaluate(async (file) => window.rune.request<{ text: string }>('document/open', { path: file }), file);
+    expect(doc.text).toBe('val external = 99\n');
+    await editor.focus(); await page.keyboard.press('Control+End'); await page.keyboard.insertText('(* closing *)');
+    await app.evaluate(({ dialog, BrowserWindow }) => { dialog.showMessageBox = async () => ({ response: 2, checkboxChecked: false }); BrowserWindow.getAllWindows()[0].close(); });
+    await expect(page.getByText('1 unsaved · Rune')).toBeVisible();
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
+    await page.screenshot({ path: 'test-results/editor.png' });
+    expect(errors).toEqual([]);
+  } finally {
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
+    await app.close(); fs.rmSync(folder, { recursive: true, force: true });
+  }
+});
