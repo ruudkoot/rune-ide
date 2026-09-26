@@ -20,7 +20,7 @@ in isolation do not complete a milestone.
 | M0 | This roadmap and the stack decision | — | planned and documented |
 | M1 | Desktop shell connected to an SML service | M0 | complete on Linux |
 | M2 | File browser and source editor | M1 | complete on Linux |
-| M3 | Rune compilation with structured IDE feedback | M2 | not started |
+| M3 | Rune compilation with structured IDE feedback | M2 | complete on Linux |
 | M4 | Reliable daily editing, recovery, and distribution | M3 | not started |
 | M5 | Shared SML presentation logic and interactive compiler services | M3; incremental interfaces where available | not started |
 | M6 | Execution, evaluation, and runtime inspection | M4; M5 for semantic evaluation; runtime prerequisites | not started |
@@ -207,14 +207,15 @@ persistent service and assume sessions are isolated. Fresh compiler
 processes are the M3 boundary; M5 introduces explicit compiler sessions.
 [Diagnostics](../../../rune/src/util/error.sml), [positions](../../../rune/src/util/source.sml).
 
-M3 adds opt-in structured diagnostics to Rune. Proposed spelling:
-`--diagnostics-json FILE`. This is a new feature, not an existing flag.
-Write a versioned result document to a build-specific file; ordinary
-stdout/stderr remain available in Output. Preserve default CLI diagnostic
-text and exit status. Report writing failures, and never interpret a
-missing or malformed result file as successful compilation.
-Include compiler identity, overall outcome, ordered inputs, and diagnostics
-in that document; compare its outcome with the process exit status.
+M3 implements structured diagnostics in an IDE-owned SML adapter, compiled
+from Rune's read-only sources. It shadows final error formatting and warning
+collection, then invokes the existing driver in a fresh VM. No Rune sources
+were modified and no new Rune CLI flag is assumed. A future upstream
+`--diagnostics-json FILE` interface could replace this adapter with permission.
+Write a versioned result document to a build-specific file; ordinary output
+and exit status remain unchanged. Reject missing, malformed or incompatible
+reports and record the compiler build fingerprint with the packaged adapter.
+The service associates the report with its ordered inputs and build identity.
 
 A compiler diagnostic contains severity, message, optional original source
 path, and optional half-open byte span. Reserve fields for related locations
@@ -377,9 +378,9 @@ the tree does not recursively load the workspace.
 - Implement ordered targets and toolchain selection. Validate paths, source
   order, Basis location, options, and output in SML. Allow one active build
   per workspace initially.
-- Add/document Rune's structured diagnostics output and retain default CLI
-  behavior. Detect a compiler lacking the required capability and explain
-  the mismatch rather than silently scraping human error messages.
+- Build/document the separate SML compiler adapter and retain default CLI
+  behavior. Reject an adapter with a missing/incompatible report; do not
+  scrape human error messages or modify Rune without permission.
 - Implement Save and Build, cancellation, process events, and artifact
   publication. Drain both output pipes concurrently and bound retained logs.
   Distinguish source errors, launch failures, crashes, and cancellation.
@@ -390,8 +391,8 @@ the tree does not recursively load the workspace.
   diagnostics or replace artifacts. Markers affected by later edits become
   stale or disappear. Replace current Problems on a new result while keeping
   the build log.
-- Measure save time, compiler execution, diagnostic conversion, and UI
-  publication separately.
+- Measure save time, compiler execution, report/publication, and marker
+  application. SML range conversion is currently part of compiler time.
 
 **Acceptance:** use the actual self-hosted compiler to build a valid
 multi-file program to `.rbc`; introduce a syntax error, type error, and
@@ -400,12 +401,12 @@ artifact with the CLI using identical saved inputs/options. Verify that a
 deliberately wrong file order fails and the correct order succeeds. Cover
 non-ASCII spans, Windows-shaped paths in protocol fixtures, missing compiler
 or Basis, failed save, cancellation, large output, stale results, malformed
-diagnostics, and a compiler without the new flag. A crash never becomes an
+diagnostics, and an adapter with an incompatible protocol. A crash never becomes an
 empty successful Problems panel.
 
-Update CLI documentation and diagnostic tests; run the repository checks
-required for compiler changes. Include real-build smoke tests and injected
-process failures. The release gate is a demonstration without a terminal:
+Document the adapter and target format here, with real-build smoke tests and
+injected process failures. No checks or documentation changes in Rune are
+required because this implementation does not modify its checkout. The release gate is a demonstration without a terminal:
 choose a folder/target, edit, build, jump to an error, fix, and build cleanly.
 
 ### M4. Dependable editing and distribution
@@ -548,9 +549,9 @@ not belong in compiler IRs or the VM. Native FFI, other desktop shells,
 package management, remote workspaces, collaboration, and time-travel
 debugging can be separate follow-ups after the first useful IDE.
 
-Start implementation at M1 and finish that session with the shell/service
-demonstration, protocol fixtures, and documented build commands. The next
-product gate remains M3's working compilation loop.
+M1–M3 now provide the first working editing/compilation loop on Linux. The
+next product gate is M4: recovery, file notifications, session restoration,
+and self-contained distribution. M5 and later milestones remain future work.
 
 ## External references
 

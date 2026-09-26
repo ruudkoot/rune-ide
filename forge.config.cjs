@@ -3,7 +3,7 @@ module.exports = {
   packagerConfig: {
     asar: true,
     executableName: 'rune-ide',
-    extraResource: [path.join(__dirname, 'build', 'service.rbc')],
+    extraResource: ['service.rbc', 'compiler.rbc', 'compiler-info.json'].map(file => path.join(__dirname, 'build', file)),
   },
   plugins: [{
     name: '@electron-forge/plugin-webpack',

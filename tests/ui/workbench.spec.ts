@@ -69,6 +69,9 @@ test('edit, save, split, undo, conflict and cancel a dirty close', async () => {
     fs.writeFileSync(file, 'val external = 99\n');
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.locator('.output .error')).toContainText('changed on disk');
+    await page.getByRole('button', { name: 'Save and Build', exact: true }).click();
+    await expect(page.locator('.output .error')).toContainText('changed on disk');
+    expect((await page.evaluate(() => window.rune.buildStatus())).id).toBeNull();
     expect(fs.readFileSync(file, 'utf8')).toBe('val external = 99\n');
     await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
     await page.getByRole('button', { name: /Close hello λ.sml/ }).click();
@@ -82,6 +85,48 @@ test('edit, save, split, undo, conflict and cancel a dirty close', async () => {
     await expect(page.getByText('1 unsaved · Rune')).toBeVisible();
     await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
     await page.screenshot({ path: 'test-results/editor.png' });
+    expect(errors).toEqual([]);
+  } finally {
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
+    await app.close(); fs.rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+test('build, navigate a Rune diagnostic, fix the source and rebuild', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os');
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'rune-ui-build-'));
+  const file = path.join(folder, 'a.sml');
+  fs.writeFileSync(file, 'structure A = struct (* 🙂 λ *) val x : int = "bad" end\n');
+  fs.writeFileSync(path.join(folder, 'b.sml'), 'structure B = struct val n = A.x end\n');
+  fs.writeFileSync(path.join(folder, 'sources.txt'), 'a.sml\nb.sml\n');
+  const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  delete env.ELECTRON_RUN_AS_NODE;
+  const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
+  try {
+    const page = await app.firstWindow(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+    await expect(page.getByText('SML service connected')).toBeVisible();
+    await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, folder);
+    await page.getByRole('button', { name: 'Open folder', exact: true }).first().click();
+    await expect(page.getByRole('combobox', { name: 'Build target' })).toHaveValue('workspace');
+    await page.getByRole('button', { name: 'Save and Build', exact: true }).click();
+    await expect(page.locator('.build-state')).toHaveText('Build failed');
+    await expect(page.locator('.problem-row')).toContainText('type mismatch');
+    await page.locator('.problem-row').click();
+    await expect(page.getByRole('tab', { name: 'a.sml', exact: true })).toBeVisible();
+    await expect(page.locator('.squiggly-error').first()).toBeVisible();
+    await page.screenshot({ path: 'test-results/compiler-diagnostic.png' });
+    const editor = page.getByRole('textbox', { name: 'Source editor ' + file, exact: true });
+    await editor.focus(); await page.keyboard.press('Control+a');
+    await page.keyboard.insertText('structure A = struct val x = 42 end\n');
+    await expect(page.locator('.squiggly-error')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Save and Build', exact: true }).click();
+    await expect(page.locator('.build-state')).toHaveText('Build success');
+    expect(fs.existsSync(path.join(folder, '.rune-ide/workspace.rbc'))).toBe(true);
+    expect(fs.readFileSync(file, 'utf8')).toBe('structure A = struct val x = 42 end\n');
+    await expect(page.locator('.problem-row')).toHaveCount(0);
+    await page.getByRole('tab', { name: 'Output', exact: true }).click();
+    await expect(page.locator('.output')).toContainText('Build success');
+    await page.screenshot({ path: 'test-results/compiled.png' });
     expect(errors).toEqual([]);
   } finally {
     await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });

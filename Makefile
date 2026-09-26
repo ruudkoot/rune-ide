@@ -3,19 +3,21 @@ export RUNE_ROOT
 unexport ELECTRON_RUN_AS_NODE
 export PATH := $(CURDIR)/.tools/node_modules/node/bin:$(PATH)
 
-.PHONY: setup service dev check check-hosts package test-ui
+.PHONY: setup service compiler dev check check-hosts package test-ui
 setup:
 	npm install --prefix .tools --no-package-lock --no-audit --no-fund node@24
 	npm ci
 service:
 	python3 scripts/build-service.py
-dev: service
+compiler:
+	python3 scripts/build-compiler.py
+dev: service compiler
 	npm start
-check: service
+check: service compiler
 	npm test
-check-hosts:
+check-hosts: compiler
 	python3 scripts/check-hosts.py
-package: service
+package: service compiler
 	npm run package
 test-ui: package
 	npm run test:ui

@@ -52,4 +52,34 @@ buffers. Document policy errors use `-32020`; filesystem errors use `-32000`.
 The renderer serializes edits/saves per document and retains its buffer after
 errors. A UI unsaved indicator can be optimistic while an edit is in flight.
 
-M3 adds build identities and diagnostics.
+## Builds (M3)
+
+| Method | Parameters | Result |
+|---|---|---|
+| `build/targets` | `{activePath?: string}` | `{name, sources: string[], output}[]` |
+| `build/prepare` | `{target, activePath?, toolchain, compiler}` | `{id, executable, args, cwd, target}` |
+| `build/finish` | `{id, exitCode: number or null, cancelled?, failure?}` | `{id, state, diagnostics, output, sources}` |
+| `diagnostic/open` | `{index}` | Document snapshot; external sources add `readOnly: true` |
+
+Only Electron main can call prepare/finish; they are not on the renderer's
+request allowlist. The renderer can start/cancel a build through dedicated
+preload methods and subscribe to bounded log/status updates. Preparation
+validates the ordered sources, toolchain, Basis, output and saved documents in
+SML. Workspace changes and overlapping builds are rejected until completion.
+`-32030` denotes build policy errors. A completion with the wrong ID cannot
+finish the active build.
+
+Result states are `success`, `failed`, `cancelled`, or `stale`. Diagnostics have
+`severity` (`error` or `warning`), `message`, `path`, and a nullable Monaco-shaped
+range with 1-based UTF-16 line/columns. Paths are JSON strings, never parsed from
+human diagnostics; Windows-shaped paths survive transport unchanged. Original
+byte spans remain in the compiler's report file. A missing location stays
+visible without an invented position. External source access is restricted to
+a diagnostic in the latest result and opens read-only.
+
+The adapter writes `{version: 1, success, compilerVersion, diagnostics}` to its
+unique report path. The service compares success with the child exit code,
+validates ranges, and rejects missing or incompatible reports. An ordinary Rune
+CLI bytecode file cannot silently substitute for this adapter. Failed builds
+with no source diagnostic receive a generic problem pointing to Output. Only a
+successful result with unchanged saved inputs publishes the candidate artifact.

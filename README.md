@@ -11,7 +11,7 @@ toolchain/source input; changing it requires permission. Its existing
 ```sh
 make setup                 # install a local Node 24 and locked dependencies
 make dev                   # compile the SML service and launch the IDE
-make check                 # Rune service, TypeScript, protocol integration tests
+make check                 # service/compiler, TypeScript and process integration tests
 make check-hosts           # same service on MLton, Poly/ML, SML/NJ 64 and 32 bits
 make test-ui               # package and exercise the actual Electron application
 ```
@@ -20,9 +20,25 @@ Set `RUNE_ROOT=/path/to/rune` to use another toolchain. These commands write
 only to this repository. `make setup` needs npm and network access; build
 scripts need Python 3. UI tests require a working graphical display.
 
+Start the packaged Linux app with:
+
+```sh
+env -u ELECTRON_RUN_AS_NODE ./out/Rune-linux-x64/rune-ide
+```
+
 The Linux development package is `out/Rune-linux-x64/rune-ide`. At this stage
-it includes service bytecode but still uses `RUNE_ROOT/bin/runevm` at runtime;
+it includes the service and compiler adapter bytecode but still uses `RUNE_ROOT/bin/runevm` at runtime;
 self-contained cross-platform distribution belongs to milestone M4.
+
+M1–M3 are implemented: open a folder, browse/edit/save sources, and use
+**Save and Build** to compile an ordered `sources.txt` (or `.rune-ide.json`
+target). Click Problems to navigate compiler diagnostics. With no project
+manifest, the active source file is the target. See the architecture document
+for the target format and current limits.
+
+For a first run, open this repository's [examples/hello](examples/hello) folder
+and click **Save and Build**. Change the string in main.sml, or introduce a type
+error in greeting.sml to try diagnostic navigation.
 
 See [the roadmap](docs/plans/ide.md), [architecture and behavior](docs/ide.md),
 and [the protocol](docs/ide-protocol.md). Commit subjects follow Rune's master
