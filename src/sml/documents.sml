@@ -32,7 +32,7 @@ struct
   fun summary (d : document) = Json.Object [("path", Json.String (#path d)),
     ("revision", Json.int (!(#revision d))), ("dirty", Json.Bool (dirty d))]
   fun snapshot (d : document) = case summary d of Json.Object fields =>
-      Json.Object (("text", Json.String (!(#text d))) :: ("bom", Json.Bool (#bom d)) :: fields)
+      Json.Object (("text", Json.String (!(#text d))) :: ("savedText", Json.String (!(#saved d))) :: ("bom", Json.Bool (#bom d)) :: fields)
     | _ => raise Fail "document summary"
   fun find path = case List.find (fn (d : document) => #path d = path) (!documents) of
       SOME d => d | NONE => raise Invalid "document is not open"
@@ -40,7 +40,8 @@ struct
     let val path = Workspace.resolve path
     in case List.find (fn (d : document) => #path d = path) (!documents) of
       SOME d => snapshot d
-    | NONE => let val raw = read path
+    | NONE => let val () = if Session.pending (Workspace.current (), path) then raise Invalid "This file has recoverable edits. Restore or discard them in the recovery banner first." else ()
+                  val raw = read path
                   val hasBom = String.isPrefix bom raw
                   val text = if hasBom then String.extract (raw, 3, NONE) else raw
                   val () = validate text
@@ -70,6 +71,7 @@ struct
               else apply (rest, String.substring (current, 0, a) ^ text ^ String.extract (current, b, NONE), a)
         val text = apply (edits, original, String.size original)
         val () = validate text
+        val () = Session.put (Workspace.current (), #path d, text, !(#saved d), !(#revision d) + 1, #bom d)
     in #text d := text; #revision d := !(#revision d) + 1; summary d end
   fun diskText (d : document) text = (if #bom d then bom else "") ^ text
   fun checkDisk (d : document) =
@@ -95,15 +97,51 @@ struct
           in if n = 0 then raise Invalid "save made no progress" else write (i + n) end
         fun finish () = (write 0; Posix.FileSys.fchmod (fd, mode); Posix.IO.fsync fd;
                         Posix.IO.close fd; closed := true; checkDisk d;
-                        OS.FileSys.rename {old = temp, new = path})
+                        OS.FileSys.rename {old = temp, new = path}; Disk.syncDirectory (OS.Path.dir path))
         val () = finish () handle e => (cleanup (); raise e)
-    in #saved d := !(#text d); summary d end
+    in #saved d := !(#text d); Session.forget (Workspace.current (), #path d); summary d end
   fun closeFile params =
     let val d = checked params
         val () = if dirty d andalso Json.field params "discard" <> Json.Bool true
                  then raise Invalid "document has unsaved changes" else ()
+        val () = Session.forget (Workspace.current (), #path d)
     in documents := List.filter (fn (other : document) => #path other <> #path d) (!documents); Json.Null end
   fun list () = Json.Array (List.map summary (!documents))
   fun requireClean () = if List.exists dirty (!documents) then raise Invalid "close unsaved documents before changing workspace" else ()
   fun reset () = (requireClean (); documents := [])
+  fun endSession () =
+    (List.app (fn (d : document) => Session.forget (Workspace.current (), #path d)) (!documents); Json.Null)
+  (* Reattach a surviving Monaco model after a service crash. The original
+     saved baseline is retained, so a changed disk file still causes a conflict. *)
+  fun attach params =
+    let val path = Workspace.resolve (Json.getString params "path")
+        val text = Json.getString params "text"
+        val saved = Json.getString params "savedText"
+        val () = validate text
+        val () = validate saved
+        val hasBom = Json.field params "bom" = Json.Bool true
+        val () = if List.exists (fn (d : document) => #path d = path) (!documents) then raise Invalid "document is already attached" else ()
+        val alreadySaved = (read path = (if hasBom then bom else "") ^ text handle _ => false)
+        val baseline = if alreadySaved then text else saved
+        val () = Session.put (Workspace.current (), path, text, baseline, 0, hasBom)
+        val () = Session.activate (Workspace.current (), path)
+        val d = {path = path, text = ref text, saved = ref baseline, revision = ref 0, bom = hasBom}
+    in documents := d :: !documents; snapshot d end
+  fun recover id =
+    let val data = Session.find id
+        val () = if Json.getString data "workspace" = Workspace.current () then () else raise Invalid "Open the original workspace before restoring this buffer"
+        val path = Workspace.resolve (Json.getString data "path")
+        val () = if List.exists (fn (d : document) => #path d = path) (!documents) then raise Invalid "close the open document before restoring its recovery buffer" else ()
+        val text = Json.getString data "text"
+        val saved = Json.getString data "saved"
+        val hasBom = Json.field data "bom" = Json.Bool true
+        val () = validate text
+        val () = validate saved
+        val alreadySaved = (read path = (if hasBom then bom else "") ^ text handle _ => false)
+        val baseline = if alreadySaved then text else saved
+        val d = {path = path, text = ref text, saved = ref baseline, revision = ref 0, bom = hasBom}
+        val () = if alreadySaved then Session.forget (Workspace.current (), path)
+                 else Session.put (Workspace.current (), path, text, baseline, 0, hasBom)
+        val () = Session.activate (Workspace.current (), path)
+    in documents := d :: !documents; snapshot d end
 end

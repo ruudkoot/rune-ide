@@ -11,7 +11,7 @@ export class ServiceClient extends EventEmitter {
   status: ServiceStatus = { state: 'starting', message: 'Starting Standard ML service…' };
   readonly ready: Promise<unknown>;
 
-  constructor(vm: string, bytecode: string) {
+  constructor(vm: string, bytecode: string, stateDir?: string) {
     super();
     this.child = spawn(vm, ['--heap-size', '67108864', bytecode], { stdio: 'pipe', windowsHide: true });
     this.child.stdout.setEncoding('utf8');
@@ -36,19 +36,20 @@ export class ServiceClient extends EventEmitter {
     this.child.on('error', (error) => this.fail(error));
     this.child.stdin.on('error', (error) => { if (!this.closing) this.fail(error); });
     this.child.on('exit', (code, signal) => {
-      if (!this.closing) this.fail(new Error(`SML service exited (${signal || code}). Reopen the application to restart it.`));
+      if (!this.closing) this.fail(new Error(`SML service exited (${signal || code}). Restart the service to reconnect your editors.`));
       else {
         for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(new Error('Service stopped')); }
         this.pending.clear();
       }
     });
-    this.ready = this.request('initialize', { protocol: 1 }).then((value) => {
+    this.ready = this.request('initialize', { protocol: 1, stateDir }).then((value) => {
       this.status = { state: 'ready', message: 'Standard ML on Rune' }; this.emit('status', this.status); return value;
     }).catch((error) => { this.fail(error); throw error; });
     // Startup failure is also observable through status; do not leave an unhandled rejection.
     void this.ready.catch(() => undefined);
   }
   private fail(error: Error) {
+    if (this.status.state === 'failed') return;
     this.status = { state: 'failed', message: error.message };
     for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(error); }
     this.pending.clear(); this.emit('status', this.status);

@@ -7,19 +7,32 @@ struct
   fun dispatch method params =
     if method = "initialize" then
       if Json.getInt params "protocol" <> 1 then raise Rpc (~32001, "incompatible protocol version")
-      else (initialized := true; Json.Object [("protocol", Json.int 1), ("implementation", Json.String "Standard ML on Rune")])
+      else if !initialized then raise Rpc (~32002, "service is already initialized")
+      else (case Json.field params "stateDir" of Json.String path => Session.initialize path | _ => ();
+            initialized := true; Json.Object [("protocol", Json.int 1), ("implementation", Json.String "Standard ML on Rune")])
     else if not (!initialized) then raise Rpc (~32002, "initialize the service first")
     else case method of
       "ping" => params
     | "shutdown" => (stopping := true; Json.Null)
     | "workspace/open" => (Build.idle (); Documents.requireClean ();
-        let val result = Workspace.openFolder (Json.getString params "path") in Documents.reset (); Build.reset (); result end)
+        let val previous = !Workspace.root
+            val result = Workspace.openFolder (Json.getString params "path")
+            val () = Session.setWorkspace (Workspace.current ())
+                     handle e => (Workspace.root := previous; raise e)
+        in Documents.reset (); Build.reset (); result end)
     | "workspace/list" => Workspace.listDirectory (Json.getString params "path", Json.field params "showExcluded" = Json.Bool true)
     | "document/open" => Documents.openFile (Json.getString params "path")
     | "document/change" => Documents.change params
     | "document/save" => Documents.save params
     | "document/close" => Documents.closeFile params
     | "document/list" => Documents.list ()
+    | "document/attach" => Documents.attach params
+    | "session/load" => Session.load ()
+    | "session/save" => Session.save params
+    | "session/end" => Documents.endSession ()
+    | "session/toolchain" => (Session.setToolchain (Json.getString params "path"); Json.Null)
+    | "recovery/restore" => Documents.recover (Json.getString params "id")
+    | "recovery/discard" => Session.discard (Json.getString params "id")
     | "build/targets" => Build.list params
     | "build/prepare" => Build.prepare params
     | "build/finish" => Build.finish params
@@ -38,6 +51,8 @@ struct
        | Utf8.Invalid m => error id (~32602) m
        | Workspace.Invalid m => error id (~32010) m
        | Documents.Invalid m => error id (~32020) m
+       | Session.Invalid m => error id (~32040) m
+       | Disk.Invalid m => error id (~32040) m
        | Build.Invalid m => error id (~32030) m
        | e => error id (~32000) (General.exnMessage e)
     end

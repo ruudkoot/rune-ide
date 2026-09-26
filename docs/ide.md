@@ -62,15 +62,16 @@ the local buffer and blocks saves instead of silently desynchronizing it.
 Save and Save All preserve a UTF-8 BOM, uniform LF/CRLF endings, and POSIX
 permissions. A save compares current disk bytes with the last loaded/saved
 version, writes an exclusive temporary sibling, flushes it, checks disk again,
-and renames the sibling into place. Failed saves retain the dirty buffer.
-This is Linux replacement behavior, not a promise of crash durability or a
-lock against another writer racing the final check. ACLs, extended attributes,
+and renames the sibling into place. M4.1 also flushes the parent directory
+before clearing the recovery record. Failed saves retain the dirty buffer.
+This is Linux replacement behavior, not a lock against another writer racing
+the final check or a guarantee against filesystem/hardware failure. ACLs, extended attributes,
 hard-link identity, Windows replacement semantics and file watchers are M4 work.
 
 Files larger than 512 KiB, non-UTF-8 data, binary/control characters, mixed
 line endings and lone-CR text are explicitly rejected in this first editor.
-The buffer remains in memory until the application exits; crash recovery and
-session restoration are M4 work. New file creation and rename are also follow-ups.
+Acknowledged edits have a separate recovery journal (M4.1, below). New file
+creation and rename remain follow-ups.
 Tests edit temporary fixtures; the Rune checkout remains read-only.
 
 ## Compilation (M3)
@@ -113,10 +114,8 @@ digits, underscores or hyphens. `output` is an `.rbc` filename under `.rune-ide`
 not an arbitrary destination. `optimization` is 0 or 1; both it and `noPrelude`
 are optional. Each build has a separate work directory with its report and
 candidate artifact; a failed build leaves the last successful artifact intact
-but does not advertise it as the failed build's output. Build-directory cleanup
-and persistent preferences are M4 follow-ups. The Toolchain button selects a
-Rune installation containing `bin/runevm` and `lib/basis/MANIFEST` for this
-session. Compiler/Basis compatibility still requires a matching Rune checkout.
+but does not advertise it as the failed build's output. Build-directory cleanup remains an M4 follow-up. The Toolchain button selects a
+Rune installation containing `bin/runevm` and `lib/basis/MANIFEST` and persists the choice. Compiler/Basis compatibility still requires a matching Rune checkout.
 
 The IDE bundles `build/compiler.rbc`: an SML diagnostic adapter compiled by the
 existing self-hosted Rune compiler from read-only compiler sources. It shadows
@@ -145,3 +144,61 @@ spans on all SML hosts. Process tests cover pipe draining, bounded logs,
 cancellation, launch/crash failures and quitting during preparation. Packaged
 Electron tests cover save failure preventing a build and the complete
 build → navigate diagnostic → edit → save → successful rebuild loop.
+
+## Sessions and recovery (M4.1)
+
+SML owns the versioned session file and dirty-buffer journals under Electron's
+user-data directory, in `ide-state/`. On Linux the profile is normally under
+`~/.config/`, named for the application; `RUNE_IDE_USER_DATA` overrides it for
+isolated testing. Only one app instance may use a profile. A second launch
+focuses the existing window.
+
+The app restores the last workspace, docked tabs/splits, editor cursor/scroll
+positions, tree expansion/selection, excluded-file preference, build target
+and toolchain. The renderer supplies Dockview/Monaco view data, bounded to
+256 KiB, while SML validates its version and persists it. View changes are
+coalesced for 400 ms and flushed before an accepted quit. Missing clean files
+are skipped with an error; a missing workspace can be replaced using Open
+Folder. Floating/popout/edge layouts are not restored in this checkpoint.
+
+Each edit acknowledgement follows an atomic journal replacement: private
+0600 file, full write, fsync, rename, and directory fsync on Linux. Journals
+contain UTF-8 text, original saved baseline, BOM, workspace/path and revision.
+They are separate from source files. A storage failure rejects the edit
+acknowledgement, retains the previous service revision, and leaves Monaco's
+local text available. Edits still in transit when the whole application dies
+are not guaranteed to be recoverable. Ordinary filesystem/hardware durability
+limits still apply; native replacement semantics need verification on other OSes.
+
+After a crash, the recovery banner offers Restore or an explicitly confirmed
+Discard. Restore keeps the original saved baseline so externally changed
+sources still produce a save conflict. Restoring never writes source bytes.
+A record whose text already reached disk is recovered cleanly. Files or roots
+that disappeared are reported and their journals retained; automatic recreation
+or exporting a missing file is not implemented yet. Save, undo back to the saved
+baseline, or an accepted Discard clears the active record. Quitting normally
+clears only buffers handled by Save/Discard, keeping unhandled recovery offers.
+
+Recovery is bounded to 64 valid buffers and 16 MiB of encoded records, with
+a 4 MiB read limit per record and the existing 512 KiB document limit. Excess
+or malformed records are preserved on disk with a warning; excess valid
+records can be loaded on a later restart after saving/discarding others.
+Corrupt session metadata is renamed rather than overwritten. Preservation of
+invalid/excess files can leave the directory larger than the active quota.
+
+If the SML process fails, editors become read-only and offer Restart service.
+The new service receives current Monaco text and its saved baseline before
+editing resumes. The same models and undo history survive this reconnection;
+undo history is not serialized across application restarts. Active compilation
+is cancelled on service failure. This is process recovery, not compiler-session
+reuse.
+
+Validation covers forced termination/relaunch, split layouts and preferences,
+service restart/undo/save, Unicode/BOM/CRLF, original conflict baselines,
+failed journal writes, corrupt metadata, missing paths and quota overflow.
+All service checks run on Rune and the four supported host compilers. Packaged
+Electron tests use separate profiles and temporary sources.
+Playwright sets `RUNE_IDE_TEST_BACKGROUND=1`: Electron creates a hidden window
+with offscreen rendering and background throttling disabled, so tests and
+screenshots run without raising a window or taking desktop focus. Normal app
+launches are visible.

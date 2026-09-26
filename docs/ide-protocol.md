@@ -11,7 +11,7 @@ The host also bounds request/response sizes and request wait time.
 
 | Method | Parameters | Result |
 |---|---|---|
-| `initialize` | `{protocol: 1}` | `{protocol: 1, implementation: string}` |
+| `initialize` | `{protocol: 1, stateDir?: string}` | `{protocol: 1, implementation: string}` |
 | `ping` | Any JSON value | Same value |
 | `workspace/open` | `{path: string}` | Canonical workspace `{path, name}` |
 | `workspace/list` | `{path: string, showExcluded?: boolean}` | Entries `{path, name, directory, symlink}[]` |
@@ -34,7 +34,7 @@ IDs and transport sequencing are host details. SML returns the domain data.
 
 | Method | Parameters | Result |
 |---|---|---|
-| `document/open` | `{path}` | `{path, text, bom, revision, dirty}` |
+| `document/open` | `{path}` | `{path, text, savedText, bom, revision, dirty}` |
 | `document/change` | `{path, revision, changes: [{offset, length, text}]}` | `{path, revision, dirty}` |
 | `document/save` | `{path, revision}` | `{path, revision, dirty}` |
 | `document/close` | `{path, revision, discard?: boolean}` | `null` |
@@ -83,3 +83,41 @@ validates ranges, and rejects missing or incompatible reports. An ordinary Rune
 CLI bytecode file cannot silently substitute for this adapter. Failed builds
 with no source diagnostic receive a generic problem pointing to Output. Only a
 successful result with unchanged saved inputs publishes the candidate artifact.
+
+## Sessions and recovery (M4.1)
+
+The host optionally supplies `stateDir` at initialization. Omitting it keeps
+persistence disabled for isolated service use. Initialization is accepted once.
+Session policy errors use `-32040`; OS failures remain `-32000`.
+
+| Method | Parameters | Result |
+|---|---|---|
+| `session/load` | `{}` | `{version: 1, workspace, view, settings, recovery, warnings}` |
+| `session/save` | `{workspace?, view, settings}` | `null` |
+| `session/toolchain` | `{path}` | `null` (host only) |
+| `session/end` | `{}` | `null` (host only, after accepted quit) |
+| `recovery/restore` | `{id}` | Document snapshot, revision 0 |
+| `recovery/discard` | `{id}` | `null` |
+| `document/attach` | `{path, text, savedText, bom}` | Document snapshot, revision 0 |
+
+`workspace` is a canonical root or null. `view` is null or a version-1 opaque
+renderer object (at most 256 KiB). `settings` contains optional/null `target`,
+`toolchain`, and `showExcluded`. A supplied workspace in `session/save` must
+match the current session. `recovery` lists pending records as
+`{id, workspace, path, revision}`; warnings are strings. No journal text is
+included in this list. Unknown versions are rejected/preserved rather than
+silently migrated.
+
+With persistence enabled, document changes are journalled before revision
+acknowledgement. A pending record blocks ordinary `document/open` for that
+path until restored or discarded. Restore requires its original workspace
+and path; it keeps the saved baseline for future conflict checks. Discard
+accepts only pending records, not journals already attached to live editors.
+`document/attach` reconnects an existing renderer model after service restart,
+validates/journals its current text and baseline, and retires any pending offer
+for that path. The renderer must freeze edits while attaching models.
+
+The host calls `session/end` only after the renderer completes its close
+prompts. It removes active journals, leaving unhandled recovery offers intact.
+`shutdown` by itself never clears journals. See architecture documentation for
+storage limits, atomic-write behavior and missing-path handling.

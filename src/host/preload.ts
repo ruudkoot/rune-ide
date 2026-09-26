@@ -11,6 +11,7 @@ const bridge: RuneBridge = {
   buildStatus: () => ipcRenderer.invoke('rune:build-status'),
   toolchain: () => ipcRenderer.invoke('rune:toolchain'),
   chooseToolchain: () => ipcRenderer.invoke('rune:choose-toolchain'),
+  restartService: () => ipcRenderer.invoke('rune:restart-service'),
   onBuild: listener => {
     const handler = (_event: Electron.IpcRendererEvent, status: BuildStatus) => listener(status);
     ipcRenderer.on('rune:build', handler);

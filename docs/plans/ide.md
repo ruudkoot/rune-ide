@@ -21,7 +21,7 @@ in isolation do not complete a milestone.
 | M1 | Desktop shell connected to an SML service | M0 | complete on Linux |
 | M2 | File browser and source editor | M1 | complete on Linux |
 | M3 | Rune compilation with structured IDE feedback | M2 | complete on Linux |
-| M4 | Reliable daily editing, recovery, and distribution | M3 | not started |
+| M4 | Reliable daily editing, recovery, and distribution | M3 | M4.1 complete on Linux; remaining checkpoints below |
 | M5 | Shared SML presentation logic and interactive compiler services | M3; incremental interfaces where available | not started |
 | M6 | Execution, evaluation, and runtime inspection | M4; M5 for semantic evaluation; runtime prerequisites | not started |
 | M7 | Advanced compiler tools and measured product polish | relevant parts of M4–M6 | not started |
@@ -413,6 +413,24 @@ choose a folder/target, edit, build, jump to an error, fix, and build cleanly.
 
 **Deliver:** reliable daily editing and packaged desktop builds.
 
+Split implementation into independently committed checkpoints:
+
+| Checkpoint | Scope | State |
+|---|---|---|
+| M4.1 | Session/preferences, docked layout, dirty journals, recovery and service restart | complete on Linux |
+| M4.2 | File notifications, reload/conflict policy, create/rename/delete | pending |
+| M4.3 | Self-contained Linux package and clean-environment build loop | pending |
+| M4.4 | SML command registry/palette, keyboard/accessibility and performance gates | pending |
+| M4.5 | Native Windows/macOS packages, signing/update and release validation | pending |
+
+M4.1 passes the Rune/four-host service suite and packaged Electron tests for
+forced termination, explicit recovery, split/layout preferences and service
+restart preserving live undo. Recovery write failures, original conflict
+baselines, corrupt state, missing paths and bounded loading are covered.
+See the permanent architecture/protocol documents for guarantees and limits.
+Floating/popout/edge layout restoration, missing-file export/recreation and
+cross-OS filesystem semantics remain follow-ups. M4 as a whole is not complete.
+
 - Add host filesystem notifications; keep refresh/reload/conflict/coalescing
   policy in SML. Rescan after notification overflow or unavailable watching.
   Add create/rename/delete with coordinated document/tree updates.
@@ -549,9 +567,8 @@ not belong in compiler IRs or the VM. Native FFI, other desktop shells,
 package management, remote workspaces, collaboration, and time-travel
 debugging can be separate follow-ups after the first useful IDE.
 
-M1–M3 now provide the first working editing/compilation loop on Linux. The
-next product gate is M4: recovery, file notifications, session restoration,
-and self-contained distribution. M5 and later milestones remain future work.
+M1–M3 now provide the first working editing/compilation loop on Linux. M4.1 adds recovery and session restoration. The
+remaining M4 gates include file notifications and self-contained distribution. M5 and later milestones remain future work.
 
 ## External references
 

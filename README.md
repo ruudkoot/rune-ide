@@ -41,7 +41,9 @@ M1–M3 are implemented: open a folder, browse/edit/save sources, and use
 **Save and Build** to compile an ordered `sources.txt` (or `.rune-ide.json`
 target). Click Problems to navigate compiler diagnostics. With no project
 manifest, the active source file is the target. See the architecture document
-for the target format and current limits.
+for the target format and current limits. M4.1 adds saved workbench sessions,
+crash recovery for acknowledged unsaved edits, and service restart without
+losing the live editor models or undo history.
 
 For a first run, open this repository's [examples/hello](examples/hello) folder
 and click **Save and Build**. Change the string in main.sml, or introduce a type

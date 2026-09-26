@@ -1,11 +1,13 @@
 import * as monaco from 'monaco-editor/editor/editor.api.js';
-import { DockviewApi, IDockviewPanel } from 'dockview-react';
+import { DockviewApi, SerializedDockview } from 'dockview-react';
 import { BuildStatus, Diagnostic, DocumentSnapshot, DocumentState } from '../shared/protocol';
 
 export type OpenDocument = {
   state: DocumentState; model: monaco.editor.ITextModel; savedValue: string;
   queue: Promise<void>; failed?: Error; subscription: monaco.IDisposable; readOnly: boolean;
+  bom: boolean; acknowledgedVersion: number;
 };
+export type EditorLayout = { version: 1; layout: SerializedDockview; viewStates: Record<string, monaco.editor.ICodeEditorViewState>; expanded: string[]; selected: string[] };
 
 // Monaco owns presentation and undo; SML acknowledges every domain edit and save.
 export class EditorStore {
@@ -21,6 +23,16 @@ export class EditorStore {
   private opening = new Map<string, Promise<OpenDocument>>();
   private serial = 0;
   private lastActive?: string;
+  suspended = false;
+  sessionChanged: () => void = () => {};
+  suspend(value: boolean) {
+    this.suspended = value;
+    for (const editor of this.editors.values()) {
+      const doc = [...this.documents.values()].find(d => d.model === editor.getModel());
+      editor.updateOptions({ readOnly: value || !!doc?.readOnly });
+    }
+    this.changed();
+  }
   constructor(readonly changed: () => void, readonly report: (error: unknown) => void) {}
   run(task: Promise<unknown>) { void task.catch(this.report); }
   activePanel() {
@@ -40,12 +52,14 @@ export class EditorStore {
     const snapshot = supplied || await window.rune.request<DocumentSnapshot>('document/open', { path });
     const existing = this.documents.get(snapshot.path); if (existing) return existing;
     const model = monaco.editor.createModel(snapshot.text, /\.(sml|sig|fun)$/.test(path) ? 'sml' : 'plaintext', monaco.Uri.file(snapshot.path));
-    const doc: OpenDocument = { state: snapshot, model, savedValue: snapshot.text, queue: Promise.resolve(), subscription: { dispose() {} }, readOnly: !!snapshot.readOnly };
+    const doc: OpenDocument = { state: snapshot, model, savedValue: snapshot.savedText ?? snapshot.text, queue: Promise.resolve(), subscription: { dispose() {} }, readOnly: !!snapshot.readOnly, bom: snapshot.bom, acknowledgedVersion: model.getVersionId() };
     doc.subscription = model.onDidChangeContent(event => {
       monaco.editor.setModelMarkers(model, 'rune', []); this.stalePaths.add(snapshot.path);
       const changes = event.changes.map(c => ({ offset: c.rangeOffset, length: c.rangeLength, text: c.text }));
+      const version = model.getVersionId();
       doc.queue = doc.queue.then(async () => {
         doc.state = await window.rune.request<DocumentState>('document/change', { path: snapshot.path, revision: doc.state.revision, changes });
+        doc.acknowledgedVersion = version; this.changed();
       }).catch(error => { doc.failed = error; throw error; });
       this.run(doc.queue); this.update(doc);
     });
@@ -59,7 +73,7 @@ export class EditorStore {
       try { doc = await pending; } finally { this.opening.delete(path); }
     }
     const existing = this.panels(doc.state.path)[0];
-    if (existing && !split) { existing.api.setActive(); return existing; }
+    if (existing && !split) { existing.api.setActive(); this.update(doc); return existing; }
     const reference = this.activePanel() || this.api.getPanel('welcome') || this.api.panels.find(p => p.params?.path);
     const panel = this.api.addPanel({ id: `document:${++this.serial}`, component: 'editor', tabComponent: 'document', title: path,
       params: { path: doc.state.path }, renderer: 'always',
@@ -89,7 +103,8 @@ export class EditorStore {
   }
   async close(panel = this.activePanel()) {
     if (!panel) return true;
-    const doc = this.documents.get(panel.params!.path)!;
+    const doc = this.documents.get(panel.params!.path);
+    if (!doc) { this.api.removePanel(panel); this.viewStates.delete(panel.id); this.changed(); return true; }
     if (this.panels(doc.state.path).length === 1) {
       if (!await this.prepare(doc)) return false;
       if (!doc.readOnly) await window.rune.request('document/close', { path: doc.state.path, revision: doc.state.revision, discard: true });
@@ -114,8 +129,59 @@ export class EditorStore {
       doc.subscription.dispose(); doc.model.dispose();
     }
     this.documents.clear(); this.viewStates.clear(); this.changed();
+    for (const panel of this.api.panels.filter(p => p.params?.path)) this.api.removePanel(panel);
   }
   async split() { const doc = this.active(); if (doc) await this.open(doc.state.path, true); }
+  capture(expanded: string[], selected: string[]): EditorLayout {
+    for (const [id, editor] of this.editors) { const view = editor.saveViewState(); if (view) this.viewStates.set(id, view); }
+    return { version: 1, layout: this.api.toJSON(), viewStates: Object.fromEntries(this.viewStates), expanded, selected };
+  }
+  async restore(raw: unknown, pendingPaths: string[] = []) {
+    const view = raw as EditorLayout;
+    if (!view || view.version !== 1 || !view.layout?.panels || !view.layout.grid) return;
+    const layout = structuredClone(view.layout);
+    const allowed = new Set(['editor', 'welcome', 'explorer', 'output', 'problems']);
+    for (const [id, panel] of Object.entries(layout.panels)) {
+      if (!panel.contentComponent || !allowed.has(panel.contentComponent)) throw new Error('Saved layout contains an unknown panel');
+      if (panel.contentComponent === 'editor') {
+        try {
+          const path = panel.params?.path;
+          if (typeof path !== 'string' || !path.startsWith(this.root + '/')) throw new Error('External editors are not restored automatically');
+          if (!pendingPaths.includes(path)) await this.load(path);
+          this.serial = Math.max(this.serial, Number(id.split(':')[1]) || 0);
+        } catch (error) { delete layout.panels[id]; this.report(error); }
+      }
+    }
+    // Drop missing editors while retaining placeholders for pending recovery.
+    const prune = (node: SerializedDockview['grid']['root']): boolean => {
+      if (Array.isArray(node.data)) { node.data = node.data.filter(prune); return node.data.length > 0; }
+      node.data.views = node.data.views.filter(id => layout.panels[id]);
+      if (!node.data.views.includes(node.data.activeView || '')) node.data.activeView = node.data.views[0];
+      return node.data.views.length > 0;
+    };
+    if (!prune(layout.grid.root)) return;
+    // Popout windows have a separate lifecycle; restore those panels in the main window later.
+    if (layout.popoutGroups?.length || layout.floatingGroups?.length || layout.edgeGroups) {
+      throw new Error('The saved auxiliary-window layout could not be restored; sources remain recoverable');
+    }
+    for (const [id, state] of Object.entries(view.viewStates || {})) if (layout.panels[id]) this.viewStates.set(id, state);
+    this.api.fromJSON(layout);
+    for (const doc of this.documents.values()) this.update(doc);
+  }
+  async reconnect() {
+    if (!this.root) return;
+    await window.rune.request('workspace/open', { path: this.root });
+    for (const doc of this.documents.values()) {
+      if (doc.readOnly) continue;
+      await doc.queue.catch(() => undefined);
+      const value = doc.model.getValue();
+      doc.state = await window.rune.request<DocumentSnapshot>('document/attach', {
+        path: doc.state.path, text: value, savedText: doc.savedValue, bom: doc.bom,
+      });
+      doc.savedValue = (doc.state as DocumentSnapshot).savedText ?? doc.savedValue;
+      doc.queue = Promise.resolve(); doc.failed = undefined; doc.acknowledgedVersion = doc.model.getVersionId(); this.update(doc);
+    }
+  }
   beginBuild() {
     this.diagnostics = []; this.stalePaths.clear(); this.buildVersions.clear();
     for (const doc of this.documents.values()) {

@@ -194,3 +194,98 @@ test('build publication rejects stale, cancelled, malformed and failed processes
   const missing = (await ask('build/prepare', { ...params, toolchain: folder })).error;
   assert.match(missing.message, /runevm/);
 });
+
+test('journalled edits survive termination, preserve conflicts and require an explicit recovery decision', { timeout: 10000 }, async t => {
+  const { readFileSync, readdirSync, statSync } = require('node:fs');
+  const folder = mkdtempSync(path.join(tmpdir(), 'rune-recovery-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const workspace = path.join(folder, 'workspace'), stateDir = path.join(folder, 'state'); mkdirSync(workspace);
+  const file = path.join(workspace, 'hello λ.sml'); writeFileSync(file, '\ufeffval x = 1\r\n');
+  const start = async () => { const s = service(t); const reply = await s.ask('initialize', { protocol: 1, stateDir }); assert.ok(reply.result, JSON.stringify(reply)); return s; };
+  const first = await start();
+  await first.ask('workspace/open', { path: workspace }); await first.ask('document/open', { path: file });
+  await first.ask('session/save', { view: { version: 1, fixture: 'layout' }, settings: { showExcluded: true, target: 'app' } });
+  const change = await first.ask('document/change', { path: file, revision: 0, changes: [{ offset: 8, length: 1, text: '42 (* 🙂 *)' }] });
+  assert.equal(change.result.revision, 1);
+  const journal = readdirSync(stateDir).find(name => name.startsWith('buffer-'));
+  assert.ok(journal); assert.equal(statSync(path.join(stateDir, journal)).mode & 0o777, 0o600);
+  first.child.kill('SIGKILL'); await new Promise(resolve => first.child.once('exit', resolve));
+  writeFileSync(file, 'val external = 99\n');
+  const second = await start();
+  const session = (await second.ask('session/load')).result;
+  assert.equal(session.workspace, workspace); assert.equal(session.view.fixture, 'layout'); assert.equal(session.settings.showExcluded, true);
+  assert.equal(session.recovery.length, 1);
+  await second.ask('workspace/open', { path: workspace });
+  assert.match((await second.ask('document/open', { path: file })).error.message, /recoverable edits/);
+  const restored = (await second.ask('recovery/restore', { id: session.recovery[0].id })).result;
+  assert.equal(restored.text, 'val x = 42 (* 🙂 *)\r\n'); assert.equal(restored.bom, true); assert.equal(restored.dirty, true);
+  assert.equal(restored.savedText, 'val x = 1\r\n');
+  assert.equal((await second.ask('session/load')).result.recovery.length, 0);
+  assert.match((await second.ask('document/save', { path: file, revision: 0 })).error.message, /changed on disk/);
+  assert.equal(readFileSync(file, 'utf8'), 'val external = 99\n');
+  assert.ok((await second.ask('recovery/discard', { id: session.recovery[0].id })).error);
+  await second.ask('document/close', { path: file, revision: 0, discard: true });
+  assert.equal(readdirSync(stateDir).filter(name => name.startsWith('buffer-')).length, 0);
+  const attached = (await second.ask('document/attach', { path: file, text: 'val external = 99\n', savedText: 'val x = 1\r\n', bom: false })).result;
+  assert.equal(attached.dirty, false); assert.equal(attached.savedText, 'val external = 99\n');
+  assert.equal(readdirSync(stateDir).filter(name => name.startsWith('buffer-')).length, 0);
+});
+
+test('recovery write failure leaves the acknowledged revision intact; corrupt state is preserved', { timeout: 10000 }, async t => {
+  const { chmodSync, readFileSync, readdirSync } = require('node:fs');
+  const folder = mkdtempSync(path.join(tmpdir(), 'rune-state-failure-'));
+  const stateDir = path.join(folder, 'state');
+  t.after(() => { if (require('node:fs').existsSync(stateDir)) chmodSync(stateDir, 0o700); rmSync(folder, { recursive: true, force: true }); });
+  const file = path.join(folder, 'main.sml'); writeFileSync(file, 'val n = 0\n');
+  const first = service(t); await first.ask('initialize', { protocol: 1, stateDir });
+  await first.ask('workspace/open', { path: folder }); await first.ask('document/open', { path: file });
+  const other = path.join(folder, 'other'); mkdirSync(other);
+  chmodSync(stateDir, 0o500);
+  assert.ok((await first.ask('workspace/open', { path: other })).error);
+  assert.equal((await first.ask('document/list')).result[0].path, file);
+  assert.equal((await first.ask('session/load')).result.workspace, folder);
+  assert.ok((await first.ask('document/change', { path: file, revision: 0, changes: [{ offset: 8, length: 1, text: '1' }] })).error);
+  const still = (await first.ask('document/open', { path: file })).result;
+  assert.equal(still.revision, 0); assert.equal(still.text, 'val n = 0\n');
+  chmodSync(stateDir, 0o700);
+  assert.ok((await first.ask('document/change', { path: file, revision: 0, changes: [{ offset: 8, length: 1, text: '1' }] })).result);
+  first.child.kill('SIGKILL'); await new Promise(resolve => first.child.once('exit', resolve));
+  writeFileSync(path.join(stateDir, 'session.json'), '{corrupt');
+  const second = service(t); await second.ask('initialize', { protocol: 1, stateDir });
+  const session = (await second.ask('session/load')).result;
+  assert.equal(session.recovery.length, 1); assert.equal(session.warnings.length, 1);
+  const backup = readdirSync(stateDir).find(name => name.startsWith('session.json.unreadable'));
+  assert.equal(readFileSync(path.join(stateDir, backup), 'utf8'), '{corrupt');
+  await second.ask('recovery/discard', { id: session.recovery[0].id });
+  assert.equal((await second.ask('session/load')).result.recovery.length, 0);
+});
+
+test('recovery quotas preserve excess records and unavailable paths without acknowledging new edits', { timeout: 10000 }, async t => {
+  const { readdirSync, readFileSync } = require('node:fs');
+  const folder = mkdtempSync(path.join(tmpdir(), 'rune-recovery-bounds-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const stateDir = path.join(folder, 'state'); mkdirSync(stateDir);
+  for (let i = 1; i <= 65; i++) writeFileSync(path.join(stateDir, `buffer-${i}.json`), JSON.stringify({
+    version: 1, workspace: folder, path: path.join(folder, `missing-${i}.sml`), text: 'val n = 1', saved: 'val n = 0', revision: 1, bom: false,
+  }));
+  const file = path.join(folder, 'active.sml'); writeFileSync(file, 'val n = 0');
+  const first = service(t); assert.ok((await first.ask('initialize', { protocol: 1, stateDir })).result);
+  let session = (await first.ask('session/load')).result;
+  assert.equal(session.recovery.length, 64); assert.match(session.warnings.join(' '), /additional records are preserved/);
+  await first.ask('workspace/open', { path: folder });
+  assert.ok((await first.ask('recovery/restore', { id: session.recovery[0].id })).error);
+  assert.equal((await first.ask('session/load')).result.recovery.length, 64);
+  await first.ask('document/open', { path: file });
+  assert.match((await first.ask('document/change', { path: file, revision: 0, changes: [{ offset: 8, length: 1, text: '1' }] })).error.message, /storage is full/);
+  assert.equal((await first.ask('document/open', { path: file })).result.text, 'val n = 0');
+  assert.equal(readFileSync(file, 'utf8'), 'val n = 0');
+  assert.equal(readdirSync(stateDir).filter(n => n.startsWith('buffer-')).length, 65);
+  await first.ask('recovery/discard', { id: session.recovery[0].id });
+  const exit = new Promise(resolve => first.child.once('exit', resolve)); await first.ask('shutdown'); await exit;
+  const second = service(t); assert.ok((await second.ask('initialize', { protocol: 1, stateDir })).result);
+  session = (await second.ask('session/load')).result;
+  assert.equal(session.recovery.length, 64); assert.equal(session.warnings.length, 0);
+  // Losing the whole workspace is also a recoverable error, not a deletion policy.
+  assert.ok((await second.ask('workspace/open', { path: path.join(folder, 'gone') })).error);
+  assert.equal((await second.ask('session/load')).result.recovery.length, 64);
+});

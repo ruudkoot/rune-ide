@@ -2,7 +2,10 @@ export type DirectoryEntry = { path: string; name: string; directory: boolean; s
 export type Workspace = { path: string; name: string };
 export type ServiceStatus = { state: 'starting' | 'ready' | 'failed'; message: string };
 export type DocumentState = { path: string; revision: number; dirty: boolean };
-export type DocumentSnapshot = DocumentState & { text: string; bom: boolean; readOnly?: boolean };
+export type DocumentSnapshot = DocumentState & { text: string; savedText?: string; bom: boolean; readOnly?: boolean };
+export type RecoveryBuffer = { id: string; workspace: string; path: string; revision: number };
+export type SessionSettings = { showExcluded?: boolean | null; target?: string | null; toolchain?: string | null };
+export type SessionState = { version: 1; workspace: string | null; view: unknown; settings: SessionSettings; recovery: RecoveryBuffer[]; warnings: string[] };
 export type Command = 'save' | 'save-all' | 'split' | 'close' | 'open-folder' | 'reveal' | 'quit' | 'build' | 'cancel-build';
 export type Diagnostic = { severity: 'error' | 'warning'; message: string; path: string; range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } | null };
 export type BuildTarget = { name: string; sources: string[]; output: string };
@@ -22,5 +25,6 @@ export interface RuneBridge {
   onBuild(listener: (status: BuildStatus) => void): () => void;
   toolchain(): Promise<string>;
   chooseToolchain(): Promise<string>;
+  restartService(): Promise<void>;
 }
 declare global { interface Window { rune: RuneBridge } }

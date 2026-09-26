@@ -7,8 +7,8 @@ import 'monaco-editor/editor/contrib/find/browser/findController.js';
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard.js';
 import 'monaco-editor/editor/contrib/hover/browser/hoverContribution.js';
 import 'monaco-editor/editor/contrib/gotoError/browser/gotoError.js';
-import { BuildStatus, BuildTarget, Command, DirectoryEntry, ServiceStatus, Workspace } from '../shared/protocol';
-import { EditorStore } from './editor-store';
+import { BuildStatus, BuildTarget, Command, DirectoryEntry, DocumentSnapshot, RecoveryBuffer, ServiceStatus, SessionState, Workspace } from '../shared/protocol';
+import { EditorLayout, EditorStore } from './editor-store';
 import './sml-language';
 import 'dockview-react/dist/styles/dockview.css';
 import './style.css';
@@ -49,18 +49,22 @@ function WelcomeEditor() {
 function EditorPanel(props: IDockviewPanelProps<{ path: string }>) {
   const { store } = useContext(Workbench);
   const element = useRef<HTMLDivElement>(null);
+  const doc = store.documents.get(props.params.path);
   useEffect(() => {
-    const doc = store.documents.get(props.params.path)!;
-    const editor = monaco.editor.create(element.current!, { ...editorOptions, model: doc.model, readOnly: doc.readOnly, ariaLabel: `Source editor ${props.params.path}` });
+    if (!doc) return;
+    const editor = monaco.editor.create(element.current!, { ...editorOptions, model: doc.model, readOnly: doc.readOnly || store.suspended, ariaLabel: `Source editor ${props.params.path}` });
     const view = store.viewStates.get(props.api.id); if (view) editor.restoreViewState(view);
     store.editors.set(props.api.id, editor);
     const range = store.revealRanges.get(props.params.path);
     if (range) { editor.setSelection(range); editor.revealRangeInCenter(range); store.revealRanges.delete(props.params.path); }
     const focus = editor.onDidFocusEditorWidget(() => props.api.setActive());
+    const cursor = editor.onDidChangeCursorPosition(() => store.sessionChanged());
+    const scroll = editor.onDidScrollChange(() => store.sessionChanged());
     const active = props.api.onDidActiveChange(({ isActive }) => { if (isActive) editor.focus(); });
     if (props.api.isActive) editor.focus();
-    return () => { const view = editor.saveViewState(); if (view) store.viewStates.set(props.api.id, view); store.editors.delete(props.api.id); focus.dispose(); active.dispose(); editor.dispose(); };
-  }, [props.params.path, props.api, store]);
+    return () => { const view = editor.saveViewState(); if (view) store.viewStates.set(props.api.id, view); store.editors.delete(props.api.id); focus.dispose(); cursor.dispose(); scroll.dispose(); active.dispose(); editor.dispose(); };
+  }, [props.params.path, props.api, store, doc]);
+  if (!doc) return <div className="empty"><p>This file has recoverable edits.</p><span>Use the recovery banner to restore or discard them.</span></div>;
   return <div ref={element} className="editor" data-document={props.params.path} />;
 }
 function DocumentTab(props: IDockviewPanelProps<{ path: string }>) {
@@ -110,13 +114,64 @@ function App() {
   const [savingBuild, setSavingBuild] = useState(false);
   const [saveMs, setSaveMs] = useState(0);
   const [markerMs, setMarkerMs] = useState(0);
+  const [layoutReady, setLayoutReady] = useState(false);
+  const [restored, setRestored] = useState(false);
+  const [recovery, setRecovery] = useState<RecoveryBuffer[]>([]);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [discardRecovery, setDiscardRecovery] = useState<string | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
+  const booted = useRef(false);
+  const restoredRef = useRef(false);
+  const sessionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const persistSession = useRef<() => Promise<void>>(async () => {});
   const [, redraw] = useState(0);
   const [store] = useState(() => new EditorStore(() => redraw(n => n + 1), e => { setError((e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': Error: /, '')); store?.api?.getPanel('output')?.api.setActive(); }));
   const closing = useRef(false);
   const activePath = store.active()?.state.path;
   const busyBuild = savingBuild || build.state === 'running';
+  persistSession.current = async () => {
+    if (!workspace || !restoredRef.current || status.state !== 'ready') return;
+    await window.rune.request('session/save', {
+      workspace: workspace.path,
+      view: store.capture(Array.from(expanded, String), Array.from(selected, String)),
+      settings: { showExcluded, target, toolchain },
+    });
+  };
+  const scheduleSession = () => {
+    clearTimeout(sessionTimer.current);
+    if (restoredRef.current) sessionTimer.current = setTimeout(() => store.run(persistSession.current()), 400);
+  };
+  store.sessionChanged = scheduleSession;
+  useEffect(() => { scheduleSession(); }, [workspace, expanded, selected, showExcluded, target, toolchain, restored]);
+  useEffect(() => () => clearTimeout(sessionTimer.current), []);
+  useEffect(() => { if (status.state === 'failed') store.suspend(true); }, [status.state, store]);
   useEffect(() => {
-    void window.rune.toolchain().then(setToolchain);
+    if (!layoutReady || status.state !== 'ready' || booted.current) return;
+    booted.current = true; store.suspend(true);
+    store.run((async () => {
+      try {
+        const session = await window.rune.request<SessionState>('session/load');
+        setRecovery(session.recovery);
+        setShowExcluded(!!session.settings.showExcluded);
+        setTarget(session.settings.target || '');
+        if (session.warnings.length) setError(session.warnings.join('\n'));
+        if (session.workspace) {
+          const ws = await window.rune.request<Workspace>('workspace/open', { path: session.workspace });
+          workspaceRef.current = ws; store.root = ws.path; setWorkspace(ws);
+          await load(ws.path, !!session.settings.showExcluded);
+          const view = session.view as EditorLayout | null;
+          const directories = (view?.expanded || []).filter(p => p.startsWith(ws.path + '/'));
+          for (const path of directories) {
+            try { await load(path, !!session.settings.showExcluded); } catch { /* A folder may have disappeared. */ }
+          }
+          setExpanded(new Set(directories)); setSelected(new Set(view?.selected || []));
+          await store.restore(session.view, session.recovery.map(d => d.path));
+        }
+      } finally { restoredRef.current = true; setRestored(true); store.suspend(false); }
+    })());
+  }, [layoutReady, status.state, store]);
+  useEffect(() => {
+    store.run(window.rune.toolchain().then(setToolchain));
     void window.rune.buildStatus().then(setBuild);
     return window.rune.onBuild(value => {
       const start = performance.now(); store.applyBuild(value); setMarkerMs(performance.now() - start); setBuild(value);
@@ -138,17 +193,54 @@ function App() {
     if (workspaceRef.current === ws) setEntries(previous => new Map(previous).set(path, rows));
   };
   const openFolder = () => store.run((async () => {
+    if (!restored) return;
     if (busyBuild) throw new Error('Finish or cancel the active build before changing workspace');
     const path = await window.rune.chooseFolder(); if (!path || closing.current) return;
     closing.current = true;
+    store.suspend(true);
     try {
       if (!await store.prepareAll()) return;
+      clearTimeout(sessionTimer.current); await persistSession.current();
       await store.clear();
       const ws = await window.rune.request<Workspace>('workspace/open', { path });
       workspaceRef.current = ws; store.root = ws.path;
       setWorkspace(ws); setEntries(new Map()); setExpanded(new Set()); setSelected(new Set()); setError(''); await load(ws.path);
-    } finally { closing.current = false; }
+    } finally { closing.current = false; store.suspend(status.state !== 'ready'); }
   })());
+  const recoverBuffer = async (buffer: RecoveryBuffer, discard = false) => {
+    if (recoveryBusy) return;
+    setRecoveryBusy(true);
+    try {
+      if (discard) {
+        await window.rune.request('recovery/discard', { id: buffer.id });
+        setDiscardRecovery(null);
+        // Replace any recovery placeholder with the current disk version.
+        if (buffer.workspace === store.root && store.panels(buffer.path).length) await store.open(buffer.path);
+      } else {
+        if (buffer.workspace !== store.root) {
+          if (workspace) throw new Error('Open ' + buffer.workspace + ' before restoring this buffer');
+          const ws = await window.rune.request<Workspace>('workspace/open', { path: buffer.workspace });
+          workspaceRef.current = ws; store.root = ws.path; setWorkspace(ws); await load(ws.path);
+        }
+        const snapshot = await window.rune.request<DocumentSnapshot>('recovery/restore', { id: buffer.id });
+        await store.open(snapshot.path, false, snapshot);
+      }
+    } finally {
+      try {
+        const session = await window.rune.request<SessionState>('session/load');
+        setRecovery(session.recovery);
+      } finally { setRecoveryBusy(false); }
+    }
+  };
+  const restartService = async () => {
+    if (reconnecting || busyBuild) return;
+    setReconnecting(true); store.suspend(true);
+    try {
+      await window.rune.restartService(); await store.reconnect();
+      const session = await window.rune.request<SessionState>('session/load'); setRecovery(session.recovery);
+      setError(''); store.suspend(false);
+    } finally { setReconnecting(false); }
+  };
   const refresh = (excluded = showExcluded) => {
     setError('');
     if (workspace) for (const path of [workspace.path, ...Array.from(expanded, String)]) store.run(load(path, excluded));
@@ -172,7 +264,13 @@ function App() {
     if (command === 'reveal') store.run(reveal());
     if (command === 'quit' && !closing.current) store.run((async () => {
       closing.current = true;
-      try { if (await store.prepareAll()) await window.rune.finishClose(); } finally { closing.current = false; }
+      store.suspend(true);
+      try {
+        if (await store.prepareAll()) {
+          clearTimeout(sessionTimer.current); await persistSession.current();
+          await window.rune.finishClose();
+        }
+      } finally { closing.current = false; store.suspend(status.state !== 'ready'); }
     })());
   };
   const startBuild = async () => {
@@ -196,6 +294,8 @@ function App() {
     event.api.addPanel({ id: 'output', component: 'output', tabComponent: 'fixed', title: 'Output', position: { referencePanel: editor.id, direction: 'below' }, initialHeight: 160 });
     event.api.addPanel({ id: 'problems', component: 'problems', tabComponent: 'fixed', title: 'Problems', position: { referencePanel: 'output', direction: 'within' }, inactive: true });
     event.api.onDidActivePanelChange(() => redraw(n => n + 1));
+    event.api.onDidLayoutChange(() => store.sessionChanged());
+    setLayoutReady(true);
   };
   const value: Context = { workspace, entries, expanded, selected, expand, select: setSelected, error, openFolder, store, build, showExcluded, toggleExcluded: show => { setShowExcluded(show); refresh(show); }, refresh: () => refresh() };
   return <Workbench.Provider value={value}><div className="application">
@@ -204,7 +304,7 @@ function App() {
       <Button className="toolbar-button" onPress={() => command('split')} isDisabled={!store.active()}>Split editor</Button>
       <Button className="toolbar-button" onPress={() => command('save')} isDisabled={!store.active()}>Save</Button>
       <Button className="toolbar-button" onPress={() => command('save-all')} isDisabled={!store.documents.size}>Save all</Button>
-      <Button className="toolbar-button" onPress={openFolder} isDisabled={status.state !== 'ready' || busyBuild}>Open folder</Button></header>
+      <Button className="toolbar-button" onPress={openFolder} isDisabled={!restored || status.state !== 'ready' || busyBuild}>Open folder</Button></header>
     <div className="build-bar">
       <label>Target <select aria-label="Build target" value={target} onChange={e => setTarget(e.target.value)} disabled={busyBuild}>
         {!targets.length && <option value="">Open a source file or project</option>}{targets.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
@@ -215,7 +315,21 @@ function App() {
       <span className="build-timings">{build.id !== null && 'Save ' + Math.round(saveMs) + ' ms · compile ' + Math.round(build.elapsedMs) + ' ms · report ' + Math.round(build.finishMs) + ' ms · markers ' + Math.round(markerMs) + ' ms'}</span>
       <Button className="toolchain-button" aria-label={"Toolchain: " + toolchain} onPress={() => store.run(window.rune.chooseToolchain().then(setToolchain))} isDisabled={busyBuild}>Toolchain</Button>
     </div>
-    {status.state === 'failed' && <div role="alert" className="error-banner">{status.message}</div>}
+    {(status.state === 'failed' || (restored && store.suspended && !closing.current)) && <div role="alert" className="error-banner">{status.state === 'failed' ? status.message : 'Editors are waiting to reconnect.'}
+      <Button className="toolbar-button" onPress={() => store.run(restartService())} isDisabled={reconnecting || busyBuild}>Restart service</Button></div>}
+    {recovery.length > 0 && <section className="recovery-banner" aria-label="Recover unsaved edits">
+      <strong>Unsaved edits are available for recovery.</strong>
+      {recovery.map(buffer => <div className="recovery-row" key={buffer.id}>
+        <span title={buffer.path}>{buffer.path}</span>
+        {discardRecovery === buffer.id ? <>
+          <span>Discard these edits?</span><Button onPress={() => store.run(recoverBuffer(buffer, true))} isDisabled={recoveryBusy}>Discard permanently</Button>
+          <Button onPress={() => setDiscardRecovery(null)}>Keep</Button>
+        </> : <>
+          <Button onPress={() => store.run(recoverBuffer(buffer))} isDisabled={recoveryBusy || !restored}>Restore</Button>
+          <Button onPress={() => setDiscardRecovery(buffer.id)} isDisabled={recoveryBusy || !restored}>Discard</Button>
+        </>}
+      </div>)}
+    </section>}
     <main><DockviewReact className="dockview-theme-rune" components={panels} tabComponents={tabs} onReady={onReady} /></main>
     <footer><span className={`service-state ${status.state}`}>● {status.state === 'ready' ? 'SML service connected' : status.message}</span><span>{workspace?.path || 'No workspace open'}</span><span className="footer-right">{Array.from(store.documents.values()).filter(d => store.dirty(d)).length} unsaved · Rune</span></footer>
   </div></Workbench.Provider>;

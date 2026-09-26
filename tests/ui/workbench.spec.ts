@@ -5,9 +5,11 @@ test('packaged workbench connects to SML and opens a real workspace', async () =
   const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   env.RUNE_ROOT = process.env.RUNE_ROOT || '/home/ruud/rune';
   delete env.ELECTRON_RUN_AS_NODE;
+  env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
   const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
   try {
     const page = await app.firstWindow();
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(false);
     const errors: string[] = []; page.on('pageerror', (e) => errors.push(e.message));
     await expect(page.getByText('SML service connected')).toBeVisible();
     await expect(page.locator('.monaco-editor')).toBeVisible();
@@ -36,6 +38,7 @@ test('edit, save, split, undo, conflict and cancel a dirty close', async () => {
   fs.writeFileSync(path.join(folder, 'nested', 'hello λ.sml'), 'val other = 2\n');
   const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   delete env.ELECTRON_RUN_AS_NODE;
+  env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
   const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
   try {
     const page = await app.firstWindow();
@@ -52,7 +55,7 @@ test('edit, save, split, undo, conflict and cancel a dirty close', async () => {
     await expect.poll(() => fs.readFileSync(file, 'utf8')).toBe('\ufeffval x = 1\r\n(* 🙂 edited *)');
     await page.getByRole('row', { name: 'nested', exact: true }).click();
     await page.keyboard.press('ArrowRight');
-    await page.getByRole('row', { name: 'hello λ.sml', exact: true }).first().dblclick();
+    await page.getByRole('row', { name: 'hello λ.sml', exact: true }).and(page.locator('[aria-level="2"]')).dblclick();
     await expect(page.getByRole('tab', { name: 'nested/hello λ.sml', exact: true })).toBeVisible();
     await page.getByRole('tab', { name: 'hello λ.sml', exact: true }).click();
     await page.getByRole('button', { name: 'Split editor', exact: true }).click();
@@ -101,6 +104,7 @@ test('build, navigate a Rune diagnostic, fix the source and rebuild', async () =
   fs.writeFileSync(path.join(folder, 'sources.txt'), 'a.sml\nb.sml\n');
   const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   delete env.ELECTRON_RUN_AS_NODE;
+  env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
   const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
   try {
     const page = await app.firstWindow(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -131,5 +135,89 @@ test('build, navigate a Rune diagnostic, fix the source and rebuild', async () =
   } finally {
     await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
     await app.close(); fs.rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+test('recover unsaved edits and split layout after forced termination', async () => {
+  test.setTimeout(60000);
+  const fs = await import('node:fs'); const os = await import('node:os');
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'rune-ui-recovery-'));
+  const file = path.join(folder, 'draft.sml'); fs.writeFileSync(file, 'val n = 1\n');
+  const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  delete env.ELECTRON_RUN_AS_NODE; env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
+  const launch = () => electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
+  let app = await launch();
+  try {
+    let page = await app.firstWindow();
+    await expect(page.getByText('SML service connected')).toBeVisible();
+    await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, folder);
+    await page.getByRole('button', { name: 'Open folder', exact: true }).first().click();
+    await page.getByRole('row', { name: 'draft.sml', exact: true }).dblclick();
+    await page.getByRole('button', { name: 'Split editor', exact: true }).click();
+    await page.getByText('Show excluded files', { exact: true }).click();
+    await expect(page.getByRole('checkbox', { name: 'Show excluded files' })).toBeChecked();
+    const editor = page.getByRole('textbox', { name: 'Source editor ' + file, exact: true });
+    await editor.last().focus(); await page.keyboard.press('Control+End'); await page.keyboard.insertText('(* recover 🙂 *)');
+    await expect.poll(async () => (await page.evaluate(file => window.rune.request<{ text: string }>('document/open', { path: file }), file)).text).toContain('recover 🙂');
+    await expect.poll(async () => {
+      const session = await page.evaluate(() => window.rune.request<{ settings: { showExcluded?: boolean }; view: { layout: { panels: Record<string, { params?: { path?: string } }> } } }>('session/load'));
+      return session.settings.showExcluded ? Object.values(session.view?.layout?.panels || {}).filter(p => p.params?.path === file).length : 0;
+    }).toBe(2);
+    const stopped = new Promise(resolve => app.process().once('exit', resolve)); app.process().kill('SIGKILL'); await stopped;
+    expect(fs.readFileSync(file, 'utf8')).toBe('val n = 1\n');
+    app = await launch(); page = await app.firstWindow();
+    await expect(page.getByRole('region', { name: 'Recover unsaved edits' })).toBeVisible();
+    await page.getByRole('button', { name: 'Restore', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Recover unsaved edits' })).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: 'Source editor ' + file, exact: true })).toHaveCount(2);
+    await expect(page.getByRole('checkbox', { name: 'Show excluded files' })).toBeChecked();
+    const recovered = await page.evaluate(file => window.rune.request<{ text: string; dirty: boolean }>('document/open', { path: file }), file);
+    expect(recovered.text).toBe('val n = 1\n(* recover 🙂 *)'); expect(recovered.dirty).toBe(true);
+    expect(fs.readFileSync(file, 'utf8')).toBe('val n = 1\n');
+    await page.screenshot({ path: 'test-results/recovered.png' });
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
+    await app.close();
+    app = await launch(); page = await app.firstWindow();
+    await expect(page.getByRole('textbox', { name: 'Source editor ' + file, exact: true })).toHaveCount(2);
+    await expect(page.getByRole('region', { name: 'Recover unsaved edits' })).toHaveCount(0);
+    expect((await page.evaluate(file => window.rune.request<{ text: string }>('document/open', { path: file }), file)).text).toBe('val n = 1\n');
+  } finally {
+    if (app.process().exitCode === null && app.process().signalCode === null) {
+      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); }); await app.close();
+    }
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+test('restart a crashed SML service without losing the live editor or undo', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os');
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'rune-ui-restart-'));
+  const file = path.join(folder, 'live.sml'); fs.writeFileSync(file, 'val n = 1\n');
+  const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  delete env.ELECTRON_RUN_AS_NODE; env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
+  const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
+  try {
+    const page = await app.firstWindow();
+    await expect(page.getByText('SML service connected')).toBeVisible();
+    await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, folder);
+    await page.getByRole('button', { name: 'Open folder', exact: true }).first().click();
+    await page.getByRole('row', { name: 'live.sml', exact: true }).dblclick();
+    const editor = page.getByRole('textbox', { name: 'Source editor ' + file, exact: true });
+    await editor.focus(); await page.keyboard.press('Control+End'); await page.keyboard.insertText('val live = 2');
+    const pid = Number(execFileSync('pgrep', ['-P', String(app.process().pid), '-x', 'runevm'], { encoding: 'utf8' }).trim()); process.kill(pid, 'SIGKILL');
+    await expect(page.getByRole('button', { name: 'Restart service' })).toBeVisible();
+    await page.getByRole('button', { name: 'Restart service' }).click();
+    await expect(page.locator('.error-banner')).toHaveCount(0);
+    expect((await page.evaluate(file => window.rune.request<{ text: string }>('document/open', { path: file }), file)).text).toBe('val n = 1\nval live = 2');
+    await editor.focus();
+    // Native EditContext can split insertText into several word-sized undo steps.
+    for (let n = 0; n < 10 && !await page.getByText('0 unsaved · Rune').isVisible(); n++) await page.keyboard.press('Control+z');
+    await expect(page.getByText('0 unsaved · Rune')).toBeVisible();
+    await page.keyboard.press('Control+End'); await page.keyboard.insertText('(* after restart *)');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect.poll(() => fs.readFileSync(file, 'utf8')).toBe('val n = 1\n(* after restart *)');
+  } finally {
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); }); await app.close();
+    fs.rmSync(folder, { recursive: true, force: true });
   }
 });
