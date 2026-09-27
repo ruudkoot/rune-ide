@@ -11,7 +11,7 @@ The host also bounds request/response sizes and request wait time.
 
 | Method | Parameters | Result |
 |---|---|---|
-| `initialize` | `{protocol: 1, stateDir?: string}` | `{protocol: 1, implementation: string}` |
+| `initialize` | `{protocol: 1, stateDir?: string, defaultToolchain?: string}` | `{protocol: 1, implementation: string}` |
 | `ping` | Any JSON value | Same value |
 | `workspace/open` | `{path: string}` | Canonical workspace `{path, name}` |
 | `workspace/list` | `{path: string, showExcluded?: boolean}` | Entries `{path, name, directory, symlink}[]` |
@@ -102,7 +102,10 @@ Session policy errors use `-32040`; OS failures remain `-32000`.
 
 `workspace` is a canonical root or null. `view` is null or a version-1 opaque
 renderer object (at most 256 KiB). `settings` contains optional/null `target`,
-`toolchain`, and `showExcluded`. A supplied workspace in `session/save` must
+`toolchain`, and `showExcluded`. The host supplies `defaultToolchain` at
+initialization; saving that exact path stores null, so the bundled toolchain
+follows a relocated package. Explicit external toolchains keep their paths.
+A supplied workspace in `session/save` must
 match the current session. `recovery` lists pending records as
 `{id, workspace, path, revision}`; warnings are strings. No journal text is
 included in this list. Unknown versions are rejected/preserved rather than

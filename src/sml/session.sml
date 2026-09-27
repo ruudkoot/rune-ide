@@ -6,6 +6,7 @@ struct
   val workspace = ref Json.Null
   val view = ref Json.Null
   val settings = ref (Json.Object [])
+  val defaultToolchain = ref ""
   val warnings : string list ref = ref []
   type draft = {id : string, data : Json.value, size : int}
   val drafts : draft list ref = ref []
@@ -23,7 +24,7 @@ struct
     else if value = Json.Null orelse Json.field value "version" = Json.int 1 then value
     else raise Invalid "unsupported layout schema"
   fun checkSettings value =
-    let fun field k = (k, Json.field value k)
+    let fun field k = (k, if k = "toolchain" andalso Json.field value k = Json.String (!defaultToolchain) then Json.Null else Json.field value k)
         fun optionalString k = case Json.field value k of Json.Null => () | Json.String s =>
               if String.size s <= 4096 then () else raise Invalid "setting is too long"
             | _ => raise Invalid ("expected string setting: " ^ k)
@@ -43,7 +44,7 @@ struct
         val () = persist (!workspace, v, opts)
     in view := v; settings := opts; Json.Null end
   fun setToolchain path =
-    let val opts = Json.Object [("toolchain", Json.String path), ("target", Json.field (!settings) "target"),
+    let val opts = Json.Object [("toolchain", if path = !defaultToolchain then Json.Null else Json.String path), ("target", Json.field (!settings) "target"),
                                ("showExcluded", Json.field (!settings) "showExcluded")]
         val () = persist (!workspace, !view, opts)
     in settings := opts end

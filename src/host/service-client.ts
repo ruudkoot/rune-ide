@@ -11,7 +11,7 @@ export class ServiceClient extends EventEmitter {
   status: ServiceStatus = { state: 'starting', message: 'Starting Standard ML service…' };
   readonly ready: Promise<unknown>;
 
-  constructor(vm: string, bytecode: string, stateDir?: string) {
+  constructor(vm: string, bytecode: string, stateDir?: string, defaultToolchain?: string) {
     super();
     this.child = spawn(vm, ['--heap-size', '67108864', bytecode], { stdio: 'pipe', windowsHide: true });
     this.child.stdout.setEncoding('utf8');
@@ -42,7 +42,7 @@ export class ServiceClient extends EventEmitter {
         this.pending.clear();
       }
     });
-    this.ready = this.request('initialize', { protocol: 1, stateDir }).then((value) => {
+    this.ready = this.request('initialize', { protocol: 1, stateDir, defaultToolchain }).then((value) => {
       this.status = { state: 'ready', message: 'Standard ML on Rune' }; this.emit('status', this.status); return value;
     }).catch((error) => { this.fail(error); throw error; });
     // Startup failure is also observable through status; do not leave an unhandled rejection.

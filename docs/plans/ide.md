@@ -21,7 +21,7 @@ in isolation do not complete a milestone.
 | M1 | Desktop shell connected to an SML service | M0 | complete on Linux |
 | M2 | File browser and source editor | M1 | complete on Linux |
 | M3 | Rune compilation with structured IDE feedback | M2 | complete on Linux |
-| M4 | Reliable daily editing, recovery, and distribution | M3 | M4.1–M4.2 complete on Linux; remaining checkpoints below |
+| M4 | Reliable daily editing, recovery, and distribution | M3 | M4.1–M4.3 complete on Linux; remaining checkpoints below |
 | M5 | Shared SML presentation logic and interactive compiler services | M3; incremental interfaces where available | not started |
 | M6 | Execution, evaluation, and runtime inspection | M4; M5 for semantic evaluation; runtime prerequisites | not started |
 | M7 | Advanced compiler tools and measured product polish | relevant parts of M4–M6 | not started |
@@ -419,7 +419,7 @@ Split implementation into independently committed checkpoints:
 |---|---|---|
 | M4.1 | Session/preferences, docked layout, dirty journals, recovery and service restart | complete on Linux |
 | M4.2 | File notifications, reload/conflict policy, create/rename/delete | complete on Linux |
-| M4.3 | Self-contained Linux package and clean-environment build loop | pending |
+| M4.3 | Self-contained Linux package and clean-environment build loop | complete on Linux |
 | M4.4 | SML command registry/palette, keyboard/accessibility and performance gates | pending |
 | M4.5 | Native Windows/macOS packages, signing/update and release validation | Windows validation via WSL2 planned; macOS testing deferred by owner |
 
@@ -569,7 +569,7 @@ package management, remote workspaces, collaboration, and time-travel
 debugging can be separate follow-ups after the first useful IDE.
 
 M1–M3 now provide the first working editing/compilation loop on Linux. M4.1 adds recovery and session restoration. The
-remaining M4 gates include file notifications and self-contained distribution. M5 and later milestones remain future work.
+remaining M4 gates include the command registry, accessibility/performance measurements and native Windows distribution. M5 and later milestones remain future work.
 
 ## External references
 

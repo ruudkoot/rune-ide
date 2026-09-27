@@ -3,8 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 test('packaged workbench connects to SML and opens a real workspace', async () => {
   const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  env.RUNE_ROOT = process.env.RUNE_ROOT || '/home/ruud/rune';
-  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ELECTRON_RUN_AS_NODE; delete env.RUNE_ROOT;
   env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
   const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
   try {
@@ -37,7 +36,7 @@ test('edit, save, split, undo, conflict and cancel a dirty close', async () => {
   fs.writeFileSync(file, '\ufeffval x = 1\r\n'); fs.mkdirSync(path.join(folder, 'nested'));
   fs.writeFileSync(path.join(folder, 'nested', 'hello λ.sml'), 'val other = 2\n');
   const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ELECTRON_RUN_AS_NODE; delete env.RUNE_ROOT;
   env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
   const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
   try {
@@ -103,7 +102,7 @@ test('build, navigate a Rune diagnostic, fix the source and rebuild', async () =
   fs.writeFileSync(path.join(folder, 'b.sml'), 'structure B = struct val n = A.x end\n');
   fs.writeFileSync(path.join(folder, 'sources.txt'), 'a.sml\nb.sml\n');
   const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ELECTRON_RUN_AS_NODE; delete env.RUNE_ROOT;
   env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
   const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
   try {
@@ -144,7 +143,7 @@ test('recover unsaved edits and split layout after forced termination', async ()
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'rune-ui-recovery-'));
   const file = path.join(folder, 'draft.sml'); fs.writeFileSync(file, 'val n = 1\n');
   const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  delete env.ELECTRON_RUN_AS_NODE; env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
+  delete env.ELECTRON_RUN_AS_NODE; delete env.RUNE_ROOT; env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
   const launch = () => electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
   let app = await launch();
   try {
@@ -194,7 +193,7 @@ test('restart a crashed SML service without losing the live editor or undo', asy
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'rune-ui-restart-'));
   const file = path.join(folder, 'live.sml'); fs.writeFileSync(file, 'val n = 1\n');
   const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  delete env.ELECTRON_RUN_AS_NODE; env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
+  delete env.ELECTRON_RUN_AS_NODE; delete env.RUNE_ROOT; env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
   const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
   try {
     const page = await app.firstWindow();
@@ -228,7 +227,7 @@ test('watch external changes, retain conflicts, rename with undo, and move files
   const file = path.join(folder, 'main.sml'); fs.writeFileSync(file, 'val n = 1\n');
   const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
-  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ELECTRON_RUN_AS_NODE; delete env.RUNE_ROOT;
   const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
   try {
     const page = await app.firstWindow();
@@ -283,4 +282,40 @@ test('watch external changes, retain conflicts, rename with undo, and move files
     await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); }); await app.close();
     fs.rmSync(folder, { recursive: true, force: true });
   }
+});
+
+test('relocated package builds with its bundled toolchain and an empty executable search path', async () => {
+  test.setTimeout(90000);
+  const fs = await import('node:fs'); const os = await import('node:os');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'rune-portable-'));
+  const workspace = path.join(temp, 'sources'); fs.mkdirSync(workspace);
+  fs.writeFileSync(path.join(workspace, 'main.sml'), 'val _ = print "Portable Rune\\n"\n');
+  fs.writeFileSync(path.join(workspace, 'sources.txt'), 'main.sml\n');
+  const first = path.join(temp, 'first location'), second = path.join(temp, 'moved location');
+  fs.cpSync(path.resolve('out/Rune-linux-x64'), first, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
+  const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  delete env.ELECTRON_RUN_AS_NODE; delete env.RUNE_ROOT;
+  env.PATH = '/no-executables-here'; env.RUNE_IDE_USER_DATA = path.join(temp, 'profile');
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined;
+  try {
+    app = await electron.launch({ executablePath: path.join(first, 'rune-ide'), cwd: temp, env });
+    let page = await app.firstWindow(); await expect(page.getByText('SML service connected')).toBeVisible();
+    await app.evaluate(({ dialog }, workspace) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [workspace] }); }, workspace);
+    await page.getByRole('button', { name: 'Open folder', exact: true }).first().click();
+    await expect(page.getByRole('combobox', { name: 'Build target' })).toHaveValue('workspace');
+    await page.getByRole('button', { name: 'Save and Build', exact: true }).click();
+    await expect(page.locator('.build-state')).toHaveText('Build success');
+    expect(await page.evaluate(() => window.rune.toolchain())).toBe(path.join(first, 'resources/toolchain'));
+    await app.close(); app = undefined;
+    fs.renameSync(first, second);
+    app = await electron.launch({ executablePath: path.join(second, 'rune-ide'), cwd: temp, env });
+    page = await app.firstWindow(); await expect(page.getByText('SML service connected')).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Build target' })).toHaveValue('workspace');
+    expect(await page.evaluate(() => window.rune.toolchain())).toBe(path.join(second, 'resources/toolchain'));
+    await page.getByRole('button', { name: 'Save and Build', exact: true }).click();
+    await expect(page.locator('.build-state')).toHaveText('Build success');
+    const output = execFileSync(path.join(second, 'resources/toolchain/bin/runevm'), [path.join(workspace, '.rune-ide/workspace.rbc')], { encoding: 'utf8', cwd: temp, env });
+    expect(output).toBe('Portable Rune\n');
+    expect((await page.evaluate(() => window.rune.request<{ settings: { toolchain: string | null } }>('session/load'))).settings.toolchain).toBeNull();
+  } finally { if (app) await app.close(); fs.rmSync(temp, { recursive: true, force: true }); }
 });

@@ -14,7 +14,8 @@ make millet                # generate Millet's MLB for service, compiler adapter
 make dev                   # compile the SML service and launch the IDE
 make check                 # service/compiler, TypeScript and process integration tests
 make check-hosts           # same service on MLton, Poly/ML, SML/NJ 64 and 32 bits
-make test-ui               # package and exercise the actual Electron application
+make test-ui               # package and exercise Electron with hidden windows
+make archive               # self-contained Linux archive and SHA-256 checksum
 ```
 
 Set `RUNE_ROOT=/path/to/rune` to use another toolchain. These commands write
@@ -33,9 +34,12 @@ Start the packaged Linux app with:
 env -u ELECTRON_RUN_AS_NODE ./out/Rune-linux-x64/rune-ide
 ```
 
-The Linux development package is `out/Rune-linux-x64/rune-ide`. At this stage
-it includes the service and compiler adapter bytecode but still uses `RUNE_ROOT/bin/runevm` at runtime;
-self-contained cross-platform distribution belongs to milestone M4.
+The Linux package is self-contained: its resources include the Rune VM,
+service, compiler adapter and matching Basis. It needs neither Node nor a Rune
+checkout at runtime. `RUNE_ROOT` is an optional runtime override.
+`make archive` creates `out/Rune-linux-x64.tar.gz` and its checksum; these are
+unsigned private development artifacts. See [distribution](docs/distribution.md)
+for validation and release gates.
 
 M1–M3 are implemented: open a folder, browse/edit/save sources, and use
 **Save and Build** to compile an ordered `sources.txt` (or `.rune-ide.json`

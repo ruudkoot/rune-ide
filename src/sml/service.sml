@@ -8,7 +8,8 @@ struct
     if method = "initialize" then
       if Json.getInt params "protocol" <> 1 then raise Rpc (~32001, "incompatible protocol version")
       else if !initialized then raise Rpc (~32002, "service is already initialized")
-      else (case Json.field params "stateDir" of Json.String path => Session.initialize path | _ => ();
+      else (Session.defaultToolchain := (case Json.field params "defaultToolchain" of Json.String path => path | _ => "");
+            case Json.field params "stateDir" of Json.String path => Session.initialize path | _ => ();
             initialized := true; Json.Object [("protocol", Json.int 1), ("implementation", Json.String "Standard ML on Rune")])
     else if not (!initialized) then raise Rpc (~32002, "initialize the service first")
     else case method of

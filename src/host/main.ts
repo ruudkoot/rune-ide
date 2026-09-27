@@ -23,7 +23,7 @@ if (!primaryInstance) app.quit();
 app.on('second-instance', () => { if (window && !window.isDestroyed()) { if (window.isMinimized()) window.restore(); window.focus(); } });
 
 if (primaryInstance) app.whenReady().then(() => {
-  const runeRoot = process.env.RUNE_ROOT || '/home/ruud/rune';
+  const runeRoot = process.env.RUNE_ROOT || (app.isPackaged ? path.join(process.resourcesPath, 'toolchain') : '/home/ruud/rune');
   let toolchain = runeRoot;
   const bytecode = app.isPackaged ? path.join(process.resourcesPath, 'service.rbc') : path.join(app.getAppPath(), 'build/service.rbc');
   const vm = path.join(runeRoot, 'bin', process.platform === 'win32' ? 'runevm.exe' : 'runevm');
@@ -31,7 +31,7 @@ if (primaryInstance) app.whenReady().then(() => {
   const stateDir = path.join(app.getPath('userData'), 'ide-state');
   const compiler = app.isPackaged ? path.join(process.resourcesPath, 'compiler.rbc') : path.join(app.getAppPath(), 'build/compiler.rbc');
   const connect = () => {
-    service = new ServiceClient(vm, bytecode, stateDir);
+    service = new ServiceClient(vm, bytecode, stateDir, runeRoot);
     builds = new BuildHost(service, compiler);
     service.on('status', status => {
       if (status.state === 'failed') builds.cancel();

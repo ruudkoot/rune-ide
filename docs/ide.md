@@ -9,7 +9,10 @@ renderer has context isolation and sandboxing, without Node access.
 `sources.txt` orders the SML modules. `scripts/build-service.py` invokes the
 existing Rune compiler with an output under `build/`; it never builds or
 modifies the Rune checkout. The application starts that bytecode in a fresh
-Rune VM. `RUNE_ROOT` selects the toolchain, defaulting to `/home/ruud/rune`.
+Rune VM. Development defaults to `/home/ruud/rune`; packaged applications
+default to their own `resources/toolchain`. `RUNE_ROOT` overrides either.
+The bundled VM, Basis, service and compiler are checked against the staging
+manifest; see [distribution](distribution.md).
 The host monitors the service and exposes startup or unexpected-exit errors
 in the workbench. Closing the application shuts down the service.
 
