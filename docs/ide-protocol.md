@@ -11,7 +11,7 @@ The host also bounds request/response sizes and request wait time.
 
 | Method | Parameters | Result |
 |---|---|---|
-| `initialize` | `{protocol: 1, stateDir?: string, defaultToolchain?: string}` | `{protocol: 1, implementation: string}` |
+| `initialize` | `{protocol: 1, stateDir?: string, defaultToolchain?: string, platform?: "linux" | "win32" | "darwin"}` | `{protocol: 1, implementation: string}` |
 | `ping` | Any JSON value | Same value |
 | `workspace/open` | `{path: string}` | Canonical workspace `{path, name}` |
 | `workspace/list` | `{path: string, showExcluded?: boolean}` | Entries `{path, name, directory, symlink}[]` |
@@ -163,3 +163,14 @@ boolean `ready`, `busy`, `building`, `workspace`, `editor`, `readOnly`, and
 all whitespace-separated terms must match label/category/ID, ignoring ASCII
 case. Availability guides presentation; mutating operations still validate
 the authoritative SML state. Host and renderer share the same registry.
+
+## Platform boundary (M4.5)
+
+The host supplies its platform during initialization. Rune's Windows runtime
+canonicalizes drive paths as `/C:/...` and UNC paths as `//server/share/...`;
+those forms are document/workspace identities on the wire. Node translates
+only when spawning a process or subscribing to filesystem notifications.
+SML selects `bin/runevm.exe` on Windows. Windows saves/journals require file
+fsync and rename, but skip unsupported directory-descriptor fsync; Linux and
+macOS retain the directory flush. Windows privacy depends on inherited
+profile/workspace ACLs, not the POSIX mode bits.

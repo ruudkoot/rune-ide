@@ -1,5 +1,6 @@
 src/sml/utf8.sml
 src/sml/json.sml
+src/sml/platform.sml
 src/sml/disk.sml
 src/sml/session.sml
 src/sml/workspace.sml

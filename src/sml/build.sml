@@ -77,9 +77,9 @@ struct
         val selected = case List.find (fn (t : target) => #name t = name) available of SOME t => t | NONE => raise Invalid "select an available build target"
         val root = Workspace.current ()
         val toolchain = OS.FileSys.fullPath (Json.getString params "toolchain")
-        val vm = OS.Path.concat (toolchain, "bin/runevm")
+        val vm = OS.Path.concat (toolchain, Platform.vmName ())
         val lib = OS.Path.concat (toolchain, "lib")
-        val () = if OS.FileSys.access (vm, [OS.FileSys.A_EXEC]) then () else raise Invalid "toolchain is missing an executable bin/runevm"
+        val () = if OS.FileSys.access (vm, [OS.FileSys.A_EXEC]) then () else raise Invalid ("toolchain is missing an executable " ^ Platform.vmName ())
         val () = if #noPrelude selected orelse exists (OS.Path.concat (lib, "basis/MANIFEST")) then () else raise Invalid "toolchain is missing lib/basis/MANIFEST"
         val compiler = OS.FileSys.fullPath (Json.getString params "compiler")
         val () = if exists compiler then () else raise Invalid "compiler adapter is missing; run make compiler"

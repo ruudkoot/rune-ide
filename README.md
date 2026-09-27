@@ -16,6 +16,8 @@ make check                 # service/compiler, TypeScript and process integratio
 make check-hosts           # same service on MLton, Poly/ML, SML/NJ 64 and 32 bits
 make test-ui               # package and exercise Electron with hidden windows
 make archive               # self-contained Linux archive and SHA-256 checksum
+make test-windows          # package and test native Windows through WSL2
+make archive RUNE_IDE_PACKAGE_PLATFORM=win32  # Windows portable ZIP and checksum
 ```
 
 Set `RUNE_ROOT=/path/to/rune` to use another toolchain. These commands write
@@ -34,8 +36,11 @@ Start the packaged Linux app with:
 env -u ELECTRON_RUN_AS_NODE ./out/Rune-linux-x64/rune-ide
 ```
 
-The Linux package is self-contained: its resources include the Rune VM,
-service, compiler adapter and matching Basis. It needs neither Node nor a Rune
+For Windows, extract `out/Rune-win32-x64.zip` to a local Windows directory
+and launch `Rune-win32-x64/rune-ide.exe`.
+
+Both packages are self-contained: their resources include the Rune VM,
+service, compiler adapter and matching Basis. They need neither Node nor a Rune
 checkout at runtime. `RUNE_ROOT` is an optional runtime override.
 `make archive` creates `out/Rune-linux-x64.tar.gz` and its checksum; these are
 unsigned private development artifacts. See [distribution](docs/distribution.md)
@@ -47,7 +52,11 @@ target). Click Problems to navigate compiler diagnostics. With no project
 manifest, the active source file is the target. See the architecture document
 for the target format and current limits. M4.1 adds saved workbench sessions,
 crash recovery for acknowledged unsaved edits, and service restart without
-losing the live editor models or undo history.
+losing the live editor models or undo history. M4.2 adds watching and file
+operations. M4.4 adds **Commands** (Ctrl+Shift+P), keyboard panel navigation,
+three persistent themes and a virtualized explorer; see [usability](docs/usability.md).
+M4.5 validates the editing/build/recovery loop in native Windows through WSL2;
+macOS native testing remains deferred.
 
 For a first run, open this repository's [examples/hello](examples/hello) folder
 and click **Save and Build**. Change the string in main.sml, or introduce a type

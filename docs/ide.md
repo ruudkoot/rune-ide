@@ -40,7 +40,9 @@ Rune service. `make check-hosts` builds the same SML modules using the four
 installed compiler hosts and repeats those tests. `make test-ui` builds a
 Linux application and runs Playwright against it, including native dialog
 stubbing and actual filesystem requests. UI tests leave a screenshot under
-`test-results/`. A passing Linux run does not establish Windows/macOS support.
+`test-results/`. `make test-windows` separately exercises native Windows from
+WSL2; its recorded coverage is in [distribution](distribution.md). macOS
+native testing remains deferred.
 
 When changing the application, run the checks relevant to the milestone,
 update behavior/protocol documentation and the roadmap, then commit that
@@ -65,11 +67,13 @@ the local buffer and blocks saves instead of silently desynchronizing it.
 Save and Save All preserve a UTF-8 BOM, uniform LF/CRLF endings, and POSIX
 permissions. A save compares current disk bytes with the last loaded/saved
 version, writes an exclusive temporary sibling, flushes it, checks disk again,
-and renames the sibling into place. M4.1 also flushes the parent directory
-before clearing the recovery record. Failed saves retain the dirty buffer.
-This is Linux replacement behavior, not a lock against another writer racing
-the final check or a guarantee against filesystem/hardware failure. ACLs, extended attributes,
-hard-link identity, Windows replacement semantics need native validation; file watching is implemented in M4.2.
+and renames the sibling into place. On POSIX, M4.1 also flushes the parent
+directory before clearing the recovery record. Failed saves retain the dirty
+buffer. Linux and Windows replacement behavior is exercised by native tests;
+neither locks out another writer racing the final check or guarantees against
+filesystem/hardware failure. ACL/extended-attribute preservation and hard-link
+identity are not guaranteed. Windows directory flushing is unavailable, as
+described below. File watching is implemented in M4.2.
 
 Files larger than 512 KiB, non-UTF-8 data, binary/control characters, mixed
 line endings and lone-CR text are explicitly rejected in this first editor.
@@ -254,3 +258,17 @@ record until an explicit close/discard decision.
 Tests cover external clean reload, conflicting local edits, missing files,
 coalesced/fallback notifications, rename with shared document identity and undo,
 protected paths/collisions, retained trash contents and recovery copies.
+
+## Windows validation and compiler limits (M4.5)
+
+The Windows package uses a UTF-8 process manifest on the copied VM and keeps
+Rune's canonical `/C:/...` paths on the wire, including compiler arguments
+and reports. Node translates executable/cwd/watch paths only. Directory
+fsync is unavailable in Rune's Windows backend, so file fsync and replacement
+remain mandatory while the POSIX directory flush is skipped. Inherited ACLs
+control Windows privacy and access. See [distribution](distribution.md).
+
+The current Rune compiler rejects a leading UTF-8 BOM. The editor preserves
+BOMs on save and reports the compiler error faithfully; successful builds
+require BOM-free sources. CRLF and Unicode comments/filenames are separately
+covered. This IDE does not silently rewrite sources or change Rune's lexer.

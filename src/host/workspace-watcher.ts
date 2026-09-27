@@ -1,3 +1,4 @@
+import { nativePath } from './native-path';
 import { watch, FSWatcher } from 'node:fs';
 
 // Native hints and a fallback pulse only. The SML service decides what changed.
@@ -18,7 +19,7 @@ export class WorkspaceWatcher {
   private attach() {
     for (const path of this.paths) if (!this.handles.has(path)) {
       try {
-        const handle = watch(path, { persistent: false }, () => this.pulse());
+        const handle = watch(nativePath(path), { persistent: false }, () => this.pulse());
         handle.on('error', () => { handle.close(); this.handles.delete(path); this.pulse(); });
         this.handles.set(path, handle);
       } catch { /* A missing folder or exhausted watch quota uses fallback rescans. */ }

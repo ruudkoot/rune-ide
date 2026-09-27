@@ -8,6 +8,10 @@ package = Path(sys.argv[1]).resolve()
 resources = package / 'resources'
 if package.suffix == '.app':
     resources = package / 'Contents/Resources'
+elif not resources.is_dir():
+    apps = list(package.glob('*.app'))
+    if len(apps) == 1:
+        resources = apps[0] / 'Contents/Resources'
 bundle = resources / 'toolchain'
 info = json.loads((bundle / 'bundle-info.json').read_text())
 if info['version'] != 1:

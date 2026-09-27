@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import struct
+import subprocess
 from sml_sources import root, rune
 
 parser = argparse.ArgumentParser()
@@ -44,6 +45,20 @@ if staging.exists():
 name = 'runevm.exe' if args.platform == 'win32' else 'runevm'
 (staging / 'bin' / name).write_bytes(raw)
 (staging / 'bin' / name).chmod(0o755)
+if args.platform == 'win32':
+    optional = pe + 24
+    directory = optional + (112 if struct.unpack_from('<H', raw, optional)[0] == 0x20b else 96)
+    if struct.unpack_from('<I', raw, directory + 4 * 8 + 4)[0]:
+        raise SystemExit('Use an unsigned VM input; package preparation must precede signing')
+    # Remove COFF debugging symbols only from our copied VM, then add a process
+    # UTF-8 manifest for Rune's narrow Win32 filesystem APIs. Signed inputs are
+    # rejected by the resource editor; signing belongs after final staging.
+    if struct.unpack_from('<I', raw, pe + 16)[0]:
+        strip = os.environ.get('RUNE_IDE_STRIP') or shutil.which({'x64': 'x86_64-w64-mingw32-strip', 'arm64': 'aarch64-w64-mingw32-strip'}[args.arch]) or shutil.which('llvm-strip')
+        if not strip:
+            raise SystemExit('Windows VM has COFF symbols; set RUNE_IDE_STRIP to a PE-compatible strip tool')
+        subprocess.run([strip, '--strip-all', str(staging / 'bin' / name)], check=True)
+    subprocess.run(['node', str(root / 'scripts/prepare-windows-vm.cjs'), str(staging / 'bin' / name), str(root / 'resources/runevm.manifest')], check=True)
 shutil.copytree(rune / 'lib/basis', staging / 'lib/basis', ignore=shutil.ignore_patterns('.cm', '*.rbc'))
 if basis_digest(staging) != info['basisSha256'] or basis_digest(rune) != info['basisSha256'] or vm.read_bytes() != raw:
     raise SystemExit('Toolchain inputs changed while staging; retry for a consistent snapshot')
@@ -53,6 +68,8 @@ for item in ['service.rbc', 'compiler.rbc', 'compiler-info.json']:
     files['../' + item] = hashlib.sha256((root / 'build' / item).read_bytes()).hexdigest()
 (staging / 'bundle-info.json').write_text(json.dumps({
     'version': 1, 'platform': args.platform, 'arch': args.arch, 'compiler': info, 'files': files,
+    'vmSourceSha256': hashlib.sha256(raw).hexdigest(),
+    'vmPreparation': 'strip-symbols-and-embed-utf8-manifest' if args.platform == 'win32' else 'copy',
 }, indent=2) + '\n')
 output = parent / 'toolchain'
 if output.exists():

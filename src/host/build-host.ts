@@ -1,6 +1,7 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { BuildResult, BuildStatus, BuildTarget } from '../shared/protocol';
+import { nativePath } from './native-path';
 import { ServiceClient } from './service-client';
 
 type Prepared = { id: number; executable: string; args: string[]; cwd: string; target: BuildTarget };
@@ -41,7 +42,7 @@ export class BuildHost extends EventEmitter {
     this.publish();
     this.done = new Promise(resolve => {
       let failure: string | undefined;
-      const child = this.child = spawn(prepared.executable, prepared.args, { cwd: prepared.cwd, stdio: 'pipe', windowsHide: true });
+      const child = this.child = spawn(nativePath(prepared.executable), prepared.args, { cwd: nativePath(prepared.cwd), stdio: 'pipe', windowsHide: true });
       child.stdin.end();
       child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
       child.stdout.on('data', chunk => this.log(chunk)); child.stderr.on('data', chunk => this.log(chunk));

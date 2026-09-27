@@ -63,3 +63,11 @@ test('filesystem watcher coalesces bursts, retries missing folders and stops its
     await new Promise(r => setTimeout(r, 250)); assert.equal(pulses, stopped);
   } finally { watcher.close(); fs.rmSync(folder, { recursive: true, force: true }); }
 });
+
+test('Windows OS adapters translate Rune drive and UNC paths without changing wire identity', () => {
+  const { nativePath } = require('../src/host/native-path.ts');
+  assert.equal(nativePath('/C:/Users/λ/source file.sml', 'win32'), 'C:\\Users\\λ\\source file.sml');
+  assert.equal(nativePath('//server/share/file.sml', 'win32'), '\\\\server\\share\\file.sml');
+  assert.equal(nativePath('/home/rune/file.sml', 'linux'), '/home/rune/file.sml');
+  assert.equal(nativePath('--no-prelude', 'win32'), '--no-prelude');
+});

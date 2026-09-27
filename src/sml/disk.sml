@@ -14,6 +14,9 @@ struct
   val serial = ref 0
   val privateMode = Posix.FileSys.S.flags [Posix.FileSys.S.irusr, Posix.FileSys.S.iwusr]
   fun syncDirectory path =
+    (* Rune's Windows backend cannot flush directory descriptors. File fsync
+       and sibling rename remain mandatory; directory crash durability differs. *)
+    if !Platform.windows then () else
     let val fd = Posix.FileSys.openf (path, Posix.FileSys.O_RDONLY, Posix.FileSys.O.flags [])
     in (Posix.IO.fsync fd; Posix.IO.close fd) handle e => (Posix.IO.close fd; raise e) end
   fun atomic (path, text) =

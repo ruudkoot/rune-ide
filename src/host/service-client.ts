@@ -42,7 +42,7 @@ export class ServiceClient extends EventEmitter {
         this.pending.clear();
       }
     });
-    this.ready = this.request('initialize', { protocol: 1, stateDir, defaultToolchain }).then((value) => {
+    this.ready = this.request('initialize', { protocol: 1, stateDir, defaultToolchain, platform: process.platform }).then((value) => {
       this.status = { state: 'ready', message: 'Standard ML on Rune' }; this.emit('status', this.status); return value;
     }).catch((error) => { this.fail(error); throw error; });
     // Startup failure is also observable through status; do not leave an unhandled rejection.

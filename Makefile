@@ -5,7 +5,7 @@ export PATH := $(CURDIR)/.tools/node_modules/node/bin:$(PATH)
 export RUNE_IDE_PACKAGE_PLATFORM ?= linux
 export RUNE_IDE_PACKAGE_ARCH ?= x64
 
-.PHONY: setup millet service compiler dev check check-hosts toolchain package archive test-ui
+.PHONY: setup millet service compiler dev check check-hosts toolchain package archive test-ui package-windows test-windows
 setup:
 	npm install --prefix .tools --no-package-lock --no-audit --no-fund node@24
 	npm ci
@@ -30,3 +30,7 @@ archive: package
 	python3 scripts/archive-package.py out/Rune-$(RUNE_IDE_PACKAGE_PLATFORM)-$(RUNE_IDE_PACKAGE_ARCH)
 test-ui: package
 	npm run test:ui
+package-windows:
+	$(MAKE) package RUNE_IDE_PACKAGE_PLATFORM=win32 RUNE_IDE_PACKAGE_ARCH=x64
+test-windows: package-windows
+	python3 scripts/test-windows.py

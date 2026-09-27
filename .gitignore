@@ -9,3 +9,4 @@ playwright-report/
 .cm/
 .rune-ide/
 __pycache__/
+test-results-windows/
