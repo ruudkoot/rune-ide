@@ -56,6 +56,7 @@ export class BuildHost extends EventEmitter {
           .then(value => {
             this.status = { ...this.status, ...(value as BuildResult), elapsedMs, finishMs: performance.now() - finishing };
             this.log('\nBuild ' + this.status.state + ' · compiler ' + Math.round(elapsedMs) + ' ms · report/publication ' + Math.round(this.status.finishMs) + ' ms\n' + (this.status.output || '') + '\n');
+            if (this.status.cleanupWarning) this.log('Warning: ' + this.status.cleanupWarning + '\n');
           })
           .catch(error => {
             this.status = { ...this.status, state: 'failed', elapsedMs, diagnostics: [{ severity: 'error', path: '', range: null, message: String(error.message || error) }] };

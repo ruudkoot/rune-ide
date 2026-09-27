@@ -10,7 +10,7 @@ struct
     | message (IO.Io {name, ...}) = "I/O error on " ^ name
     | message e = General.exnMessage e
   type target = {name : string, sources : string list, output : string, optimization : int, noPrelude : bool}
-  type job = {id : int, root : string, target : target, report : string, artifact : string,
+  type job = {id : int, root : string, target : target, report : string, artifact : string, workId : OS.FileSys.file_id,
               snapshots : (string * string) list, revisions : (string * int) list}
   val active : job option ref = ref NONE
   val lastDiagnostics : Json.value list ref = ref []
@@ -69,6 +69,16 @@ struct
   fun describe (t : target) = Json.Object [("name", Json.String (#name t)),
     ("sources", strings (#sources t)), ("output", Json.String (#output t))]
   fun list params = Json.Array (List.map describe (targets params))
+  fun cleanup (job : job) =
+    let val work = OS.Path.dir (#report job)
+        val () = if Workspace.resolve work = work andalso not (OS.FileSys.isLink work)
+                    andalso OS.FileSys.fileId work = #workId job
+                 then () else raise Invalid "build directory identity changed; temporary files retained"
+        fun remove path = OS.FileSys.remove path handle e => if exists path then raise e else ()
+        val () = List.app remove [#report job, #artifact job]
+        val () = OS.FileSys.rmDir work
+    in Json.Null end
+    handle e => Json.String ("Cannot clean temporary build files in " ^ OS.Path.dir (#report job) ^ ": " ^ message e)
   fun prepare params =
     let val () = idle ()
         val () = Documents.requireClean ()
@@ -97,7 +107,7 @@ struct
         val args = ["--heap-size", "536870912", compiler, report, "--lib", lib,
                     "-O" ^ Int.toString (#optimization selected), "-o", artifact]
                    @ (if #noPrelude selected then ["--no-prelude"] else []) @ #sources selected
-        val job = {id = !serial, root = root, target = selected, report = report, artifact = artifact,
+        val job = {id = !serial, root = root, target = selected, report = report, artifact = artifact, workId = OS.FileSys.fileId work,
                    snapshots = snapshots, revisions = revisions}
     in active := SOME job;
        Json.Object [("id", Json.int (!serial)), ("executable", Json.String vm),
@@ -157,9 +167,10 @@ struct
                     else if success andalso not (isSome publishError) then "success" else "failed"
         val diagnostics = case publishError of NONE => diagnostics | SOME e => diagnostics @ [generic ("Cannot publish artifact: " ^ e)]
         val () = lastDiagnostics := diagnostics
+        val cleanupWarning = cleanup job
     in Json.Object [("id", Json.int (#id job)), ("state", Json.String state),
          ("diagnostics", Json.Array diagnostics), ("output", if state = "success" then Json.String output else Json.Null),
-         ("sources", strings (#sources (#target job)))] end
+         ("sources", strings (#sources (#target job))), ("cleanupWarning", cleanupWarning)] end
   fun openDiagnostic params =
     let val index = Json.getInt params "index"
         val item = List.nth (!lastDiagnostics, index) handle Subscript => raise Invalid "diagnostic no longer exists"

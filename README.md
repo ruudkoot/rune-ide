@@ -56,7 +56,8 @@ losing the live editor models or undo history. M4.2 adds watching and file
 operations. M4.4 adds **Commands** (Ctrl+Shift+P), keyboard panel navigation,
 three persistent themes and a virtualized explorer; see [usability](docs/usability.md).
 M4.5 validates the editing/build/recovery loop in native Windows through WSL2;
-macOS native testing remains deferred.
+macOS native testing remains deferred. M4.6 cleans up each completed build's
+temporary files while retaining published artifacts.
 
 For a first run, open this repository's [examples/hello](examples/hello) folder
 and click **Save and Build**. Change the string in main.sml, or introduce a type

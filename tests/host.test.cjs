@@ -46,6 +46,18 @@ test('quit waits for preparation and cancels a late compiler child', { timeout: 
   assert.equal(host.status.state, 'cancelled');
 });
 
+test('cleanup warnings remain visible without turning a successful build into a failure', { timeout: 5000 }, async () => {
+  const service = fakeService('');
+  const request = service.request;
+  service.request = async (method, params) => {
+    const result = await request(method, params);
+    return method === 'build/finish' ? { ...result, cleanupWarning: 'Temporary directory could not be removed' } : result;
+  };
+  const host = new BuildHost(service, 'unused'); await host.start({ target: 'fixture' }, 'unused');
+  await new Promise(resolve => { const onStatus = status => { if (status.state !== 'running') { host.off('status', onStatus); resolve(); } }; host.on('status', onStatus); });
+  assert.equal(host.status.state, 'success'); assert.match(host.status.log, /Warning: Temporary directory/);
+});
+
 test('filesystem watcher coalesces bursts, retries missing folders and stops its fallback timer', { timeout: 5000 }, async () => {
   const os = require('node:os'), path = require('node:path');
   const { WorkspaceWatcher } = require('../src/host/workspace-watcher.ts');

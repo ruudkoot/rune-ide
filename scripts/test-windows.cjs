@@ -36,6 +36,8 @@ async function build(state) {
   await page.getByRole('button', { name: 'Save and Build', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.rune.buildStatus().then(value => value.id || 0)), { timeout: 15000 }).toBeGreaterThan(previous);
   await expect(page.locator('.build-state')).toHaveText('Build ' + state, { timeout: 60_000 });
+  assert.deepEqual(fs.readdirSync(path.join(folder, '.rune-ide')).filter(name => name.startsWith('build-')), []);
+  assert.equal(await page.evaluate(() => window.rune.buildStatus().then(value => value.cleanupWarning)), null);
 }
 (async () => {
   const started = Date.now();
@@ -105,7 +107,7 @@ async function build(state) {
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
     await page.screenshot({ path: path.join(results, 'native-windows.png') });
     assert.deepEqual(errors, []);
-    const report = { platform: process.platform, release: os.release(), architecture: process.arch, elapsedMs: Date.now() - started, checks: ['hidden native Electron', 'bundled VM/compiler/Basis', 'Unicode paths/content', 'BOM/CRLF save', 'successful build and execution', 'diagnostic navigation and rebuild', 'native watching and reload', 'conflict copy', 'case-insensitive collision, rename and trash', 'forced termination and recovery', 'keyboard palette and light theme'] };
+    const report = { platform: process.platform, release: os.release(), architecture: process.arch, elapsedMs: Date.now() - started, checks: ['hidden native Electron', 'bundled VM/compiler/Basis', 'Unicode paths/content', 'BOM/CRLF save', 'successful build and execution', 'diagnostic navigation and rebuild', 'completed-build cleanup', 'native watching and reload', 'conflict copy', 'case-insensitive collision, rename and trash', 'forced termination and recovery', 'keyboard palette and light theme'] };
     fs.writeFileSync(path.join(results, 'acceptance.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report));
   } catch (error) {

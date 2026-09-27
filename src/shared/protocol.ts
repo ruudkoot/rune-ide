@@ -14,7 +14,7 @@ export type SessionState = { version: 1; workspace: string | null; view: unknown
 export type Command = 'save' | 'save-all' | 'split' | 'close' | 'open-folder' | 'reveal' | 'quit' | 'build' | 'cancel-build' | 'close-all' | 'palette' | 'focus-explorer' | 'focus-editor' | 'focus-output' | 'focus-problems' | 'theme-dark' | 'theme-light' | 'theme-contrast' | 'zoom-in' | 'zoom-out' | 'zoom-reset';
 export type Diagnostic = { severity: 'error' | 'warning'; message: string; path: string; range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } | null };
 export type BuildTarget = { name: string; sources: string[]; output: string };
-export type BuildResult = { id: number; state: 'success' | 'failed' | 'cancelled' | 'stale'; diagnostics: Diagnostic[]; output: string | null; sources: string[] };
+export type BuildResult = { id: number; state: 'success' | 'failed' | 'cancelled' | 'stale'; diagnostics: Diagnostic[]; output: string | null; sources: string[]; cleanupWarning?: string | null };
 export type BuildStatus = Omit<BuildResult, 'id' | 'state'> & { id: number | null; state: 'idle' | 'running' | BuildResult['state']; log: string; elapsedMs: number; finishMs: number };
 export interface RuneBridge {
   request<T>(method: string, params?: unknown): Promise<T>;

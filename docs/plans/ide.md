@@ -21,7 +21,7 @@ in isolation do not complete a milestone.
 | M1 | Desktop shell connected to an SML service | M0 | complete on Linux |
 | M2 | File browser and source editor | M1 | complete on Linux |
 | M3 | Rune compilation with structured IDE feedback | M2 | complete on Linux |
-| M4 | Reliable daily editing, recovery, and distribution | M3 | M4.1–M4.5 implemented with Linux and native Windows portable-package checks; publication/accessibility gates remain |
+| M4 | Reliable daily editing, recovery, and distribution | M3 | M4.1–M4.6 implemented with Linux and native Windows portable-package checks; publication/accessibility gates remain |
 | M5 | Shared SML presentation logic and interactive compiler services | M3; incremental interfaces where available | not started |
 | M6 | Execution, evaluation, and runtime inspection | M4; M5 for semantic evaluation; runtime prerequisites | not started |
 | M7 | Advanced compiler tools and measured product polish | relevant parts of M4–M6 | not started |
@@ -422,6 +422,7 @@ Split implementation into independently committed checkpoints:
 | M4.3 | Self-contained Linux package and clean-environment build loop | complete on Linux |
 | M4.4 | SML command registry/palette, keyboard/accessibility and performance gates | implementation and automated checks complete on Linux; native accessibility checks remain release gates |
 | M4.5 | Native Windows/macOS packages, signing/update and release validation | native Windows x64 portable package checked through WSL2; signing/updates remain publication gates; macOS testing deferred by owner |
+| M4.6 | Remove completed builds' temporary files without sweeping other jobs | complete; Rune/four-host service tests and native Linux/Windows package checks pass |
 
 M4.1 passes the Rune/four-host service suite and packaged Electron tests for
 forced termination, explicit recovery, split/layout preferences and service
@@ -440,6 +441,12 @@ include resource hashes and archive checksums. See [distribution](../distributio
 for the recorded native result and signing/update gates. Native screen-reader,
 real IME and multiple display-scale checks remain; macOS testing is deferred
 by the owner. M4 as a whole is not complete.
+
+M4.6 completes the build-directory cleanup follow-up in SML. Its 17-test
+service suite passes on Rune, MLton, Poly/ML and SML/NJ 64/32 bits, including
+cleanup failures, replaced directories/symlinks and concurrent IDE jobs.
+Seven host tests and seven packaged Linux workbench regressions pass; native
+Windows acceptance also verifies temporary-file removal after each build.
 
 - Add host filesystem notifications; keep refresh/reload/conflict/coalescing
   policy in SML. Rescan after notification overflow or unavailable watching.
@@ -577,11 +584,11 @@ not belong in compiler IRs or the VM. Native FFI, other desktop shells,
 package management, remote workspaces, collaboration, and time-travel
 debugging can be separate follow-ups after the first useful IDE.
 
-M1–M3 provide the editing/compilation loop. M4.1–M4.5 add recovery, file
+M1–M3 provide the editing/compilation loop. M4.1–M4.6 add recovery, file
 operations, SML commands, measured tree/tab behavior, and Linux/Windows
-portable distributions. Signing, authenticated updates and native accessibility
-validation remain release gates; macOS native testing is deferred. M5 and
-later milestones remain future work.
+portable distributions with build cleanup. Signing, authenticated updates and
+native accessibility validation remain release gates; macOS native testing is
+deferred. M5 and later milestones remain future work.
 
 ## External references
 

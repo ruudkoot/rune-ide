@@ -121,8 +121,18 @@ digits, underscores or hyphens. `output` is an `.rbc` filename under `.rune-ide`
 not an arbitrary destination. `optimization` is 0 or 1; both it and `noPrelude`
 are optional. Each build has a separate work directory with its report and
 candidate artifact; a failed build leaves the last successful artifact intact
-but does not advertise it as the failed build's output. Build-directory cleanup remains an M4 follow-up. The Toolchain button selects a
-Rune installation containing `bin/runevm` and `lib/basis/MANIFEST` and persists the choice. Compiler/Basis compatibility still requires a matching Rune checkout.
+but does not advertise it as the failed build's output. M4.6 removes the
+temporary report and unpublished candidate after the child finishes, including
+failed, cancelled and stale builds. Cleanup checks the directory's canonical
+path and filesystem identity, removes only the two known files, then removes
+the empty directory. Unknown contents or a changed directory are retained;
+Output reports cleanup failures without changing the compiler outcome. Another
+IDE's active build directory, published artifacts, trash and recovery records
+are never swept. A forced IDE/service termination can leave a `build-*`
+directory; those remnants require manual removal after closing the IDE.
+The Toolchain button selects a Rune installation containing `bin/runevm`
+(`bin/runevm.exe` on Windows) and `lib/basis/MANIFEST` and persists the choice.
+External compiler/Basis compatibility still requires a matching Rune checkout.
 
 The IDE bundles `build/compiler.rbc`: an SML diagnostic adapter compiled by the
 existing self-hosted Rune compiler from read-only compiler sources. It shadows

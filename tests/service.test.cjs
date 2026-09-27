@@ -107,7 +107,7 @@ test('unsupported files fail explicitly and a large tree stays lazy', { timeout:
 });
 
 test('real Rune builds preserve source order and report syntax, type and warning spans', { timeout: 30000 }, async t => {
-  const { readFileSync } = require('node:fs'); const { spawnSync } = require('node:child_process');
+  const { readFileSync, existsSync } = require('node:fs'); const { spawnSync } = require('node:child_process');
   const folder = mkdtempSync(path.join(tmpdir(), 'rune-build λ '));
   t.after(() => rmSync(folder, { recursive: true, force: true }));
   const a = path.join(folder, 'a.sml'), b = path.join(folder, 'b.sml');
@@ -126,7 +126,10 @@ test('real Rune builds preserve source order and report syntax, type and warning
     const child = spawnSync(job.executable, job.args, { cwd: job.cwd, encoding: 'utf8' });
     assert.ifError(child.error);
     const reply = await ask('build/finish', { id: job.id, exitCode: child.status });
-    assert.ok(reply.result, JSON.stringify(reply)); return reply.result;
+    assert.ok(reply.result, JSON.stringify(reply));
+    assert.equal(reply.result.cleanupWarning, null);
+    assert.equal(existsSync(path.dirname(job.args[3])), false, 'completed build releases its scratch directory');
+    return reply.result;
   };
   assert.deepEqual((await ask('build/targets')).result[0].sources, [a, b]);
   const valid = await build(); assert.equal(valid.state, 'success'); assert.equal(valid.diagnostics.length, 0);
@@ -151,7 +154,7 @@ test('real Rune builds preserve source order and report syntax, type and warning
 });
 
 test('build publication rejects stale, cancelled, malformed and failed processes', { timeout: 10000 }, async t => {
-  const { readFileSync } = require('node:fs');
+  const { readFileSync, existsSync } = require('node:fs');
   const folder = mkdtempSync(path.join(tmpdir(), 'rune-build-policy-'));
   t.after(() => rmSync(folder, { recursive: true, force: true }));
   const file = path.join(folder, 'main.sml'); writeFileSync(file, 'val n = 1\n');
@@ -159,7 +162,12 @@ test('build publication rejects stale, cancelled, malformed and failed processes
   const { ask } = service(t); await ask('initialize', { protocol: 1 }); await ask('workspace/open', { path: folder });
   const params = { target: 'app', toolchain: process.env.RUNE_ROOT || '/home/ruud/rune', compiler: path.resolve('build/compiler.rbc') };
   const prepare = async () => { const r = await ask('build/prepare', params); assert.ok(r.result, JSON.stringify(r)); return r.result; };
-  const finish = async (job, extra = {}) => (await ask('build/finish', { id: job.id, exitCode: 0, ...extra })).result;
+  const finish = async (job, extra = {}) => {
+    const result = (await ask('build/finish', { id: job.id, exitCode: 0, ...extra })).result;
+    assert.equal(result.cleanupWarning, null);
+    assert.equal(existsSync(path.dirname(job.args[3])), false, 'failed/cancelled/stale builds release scratch files');
+    return result;
+  };
   let job = await prepare();
   assert.equal((await ask('build/prepare', params)).error.code, -32030);
   assert.equal((await ask('workspace/open', { path: folder })).error.code, -32030);
@@ -193,6 +201,47 @@ test('build publication rejects stale, cancelled, malformed and failed processes
   assert.ok((await ask('build/prepare', { ...params, compiler: path.join(folder, 'missing.rbc') })).error);
   const missing = (await ask('build/prepare', { ...params, toolchain: folder })).error;
   assert.match(missing.message, /runevm/);
+});
+
+test('build cleanup retains unknown contents and refuses replaced directories and symlinks', { timeout: 10000 }, async t => {
+  const { existsSync, readFileSync, renameSync } = require('node:fs');
+  const folder = mkdtempSync(path.join(tmpdir(), 'rune-build-cleanup-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const workspace = path.join(folder, 'workspace'); mkdirSync(workspace);
+  const file = path.join(workspace, 'main.sml'); writeFileSync(file, 'val n = 1\n');
+  const { ask } = service(t); await ask('initialize', { protocol: 1 }); await ask('workspace/open', { path: workspace });
+  const params = { target: 'active-file', activePath: file, toolchain: process.env.RUNE_ROOT || '/home/ruud/rune', compiler: path.resolve('build/compiler.rbc') };
+  const prepare = async () => { const r = await ask('build/prepare', params); assert.ok(r.result, JSON.stringify(r)); return r.result; };
+  const finish = async (job, cancelled = false) => (await ask('build/finish', { id: job.id, exitCode: 0, cancelled })).result;
+  let job = await prepare(); let work = path.dirname(job.args[3]);
+  const other = await prepareOther();
+  async function prepareOther() {
+    const peer = service(t); await peer.ask('initialize', { protocol: 1 }); await peer.ask('workspace/open', { path: workspace });
+    const result = await peer.ask('build/prepare', params); assert.ok(result.result, JSON.stringify(result));
+    return { ...peer, job: result.result };
+  }
+  const output = job.args[job.args.indexOf('-o') + 1]; writeFileSync(output, 'published program');
+  writeFileSync(job.args[3], JSON.stringify({ version: 1, success: true, diagnostics: [] }));
+  writeFileSync(path.join(work, 'keep.txt'), 'unrelated content');
+  const result = await finish(job);
+  assert.equal(result.state, 'success'); assert.match(result.cleanupWarning, /Cannot clean/);
+  assert.equal(readFileSync(result.output, 'utf8'), 'published program');
+  assert.equal(readFileSync(path.join(work, 'keep.txt'), 'utf8'), 'unrelated content');
+  assert.equal(existsSync(job.args[3]), false);
+  assert.ok(existsSync(path.dirname(other.job.args[3])), 'another service owns its active scratch directory');
+  assert.equal((await other.ask('build/finish', { id: other.job.id, exitCode: null, cancelled: true })).result.cleanupWarning, null);
+
+  job = await prepare(); work = path.dirname(job.args[3]);
+  renameSync(work, work + '-original'); mkdirSync(work); writeFileSync(job.args[3], 'replacement directory contents');
+  assert.match((await finish(job, true)).cleanupWarning, /identity changed/);
+  assert.equal(readFileSync(job.args[3], 'utf8'), 'replacement directory contents');
+
+  job = await prepare(); work = path.dirname(job.args[3]);
+  rmSync(work, { recursive: true });
+  const external = path.join(folder, 'external'); mkdirSync(external); writeFileSync(path.join(external, 'diagnostics.json'), 'external content');
+  symlinkSync(external, work);
+  assert.match((await finish(job, true)).cleanupWarning, /Cannot clean/);
+  assert.equal(readFileSync(path.join(external, 'diagnostics.json'), 'utf8'), 'external content');
 });
 
 test('journalled edits survive termination, preserve conflicts and require an explicit recovery decision', { timeout: 10000 }, async t => {

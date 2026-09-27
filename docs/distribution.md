@@ -54,10 +54,10 @@ Windows system tools. Results and screenshots are written to
 `test-results-windows/` in this repository.
 
 The 2026-09-27 acceptance run passed on Windows 11 x64 (build 22000), using
-native Electron and the bundled Windows VM on NTFS. The driver took 13.0 s,
+native Electron and the bundled Windows VM on NTFS. The final driver took 9.3 s,
 excluding package copying. It checked Unicode filenames/content, BOM/CRLF
 preservation, compilation and artifact execution, type-error navigation and
-rebuilding, native watch reload, dirty conflict copies, case-insensitive
+rebuilding, completed-build cleanup, native watch reload, dirty conflict copies, case-insensitive
 filename collisions, rename/trash, forced-termination recovery, and keyboard
 palette/theme switching. The window remained hidden and the renderer reported
 no uncaught errors. The light-theme screenshot was also visually inspected.

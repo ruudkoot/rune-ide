@@ -58,7 +58,7 @@ errors. A UI unsaved indicator can be optimistic while an edit is in flight.
 |---|---|---|
 | `build/targets` | `{activePath?: string}` | `{name, sources: string[], output}[]` |
 | `build/prepare` | `{target, activePath?, toolchain, compiler}` | `{id, executable, args, cwd, target}` |
-| `build/finish` | `{id, exitCode: number or null, cancelled?, failure?}` | `{id, state, diagnostics, output, sources}` |
+| `build/finish` | `{id, exitCode: number or null, cancelled?, failure?}` | `{id, state, diagnostics, output, sources, cleanupWarning}` |
 | `diagnostic/open` | `{index}` | Document snapshot; external sources add `readOnly: true` |
 
 Only Electron main can call prepare/finish; they are not on the renderer's
@@ -73,7 +73,7 @@ Result states are `success`, `failed`, `cancelled`, or `stale`. Diagnostics have
 `severity` (`error` or `warning`), `message`, `path`, and a nullable Monaco-shaped
 range with 1-based UTF-16 line/columns. Paths are JSON strings, never parsed from
 human diagnostics; Windows-shaped paths survive transport unchanged. Original
-byte spans remain in the compiler's report file. A missing location stays
+byte spans are present in the temporary compiler report. A missing location stays
 visible without an invented position. External source access is restricted to
 a diagnostic in the latest result and opens read-only.
 
@@ -83,6 +83,13 @@ validates ranges, and rejects missing or incompatible reports. An ordinary Rune
 CLI bytecode file cannot silently substitute for this adapter. Failed builds
 with no source diagnostic receive a generic problem pointing to Output. Only a
 successful result with unchanged saved inputs publishes the candidate artifact.
+
+After interpreting the report and publishing any successful artifact,
+`build/finish` removes that job's report, remaining candidate and empty work
+directory. It checks directory identity and does not recursively delete unknown
+contents or sweep other jobs. `cleanupWarning` is null on success or a message
+for Output on cleanup failure; it does not change the build state or source
+diagnostics. The host calls finish only after the child and its pipes close.
 
 ## Sessions and recovery (M4.1)
 
