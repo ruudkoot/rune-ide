@@ -1,4 +1,6 @@
 export type DirectoryEntry = { path: string; name: string; directory: boolean; symlink: boolean };
+export type WorkspaceChanges = { root: string; directories: { path: string; entries: DirectoryEntry[]; error?: string }[] };
+export type DiskState = 'same' | 'changed' | 'missing' | 'unreadable' | 'replaced';
 export type Workspace = { path: string; name: string };
 export type ServiceStatus = { state: 'starting' | 'ready' | 'failed'; message: string };
 export type DocumentState = { path: string; revision: number; dirty: boolean };
@@ -26,5 +28,7 @@ export interface RuneBridge {
   toolchain(): Promise<string>;
   chooseToolchain(): Promise<string>;
   restartService(): Promise<void>;
+  watch(paths: string[], showExcluded: boolean): Promise<void>;
+  onFilesChanged(listener: () => void): () => void;
 }
 declare global { interface Window { rune: RuneBridge } }

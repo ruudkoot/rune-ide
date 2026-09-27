@@ -36,7 +36,7 @@ IDs and transport sequencing are host details. SML returns the domain data.
 |---|---|---|
 | `document/open` | `{path}` | `{path, text, savedText, bom, revision, dirty}` |
 | `document/change` | `{path, revision, changes: [{offset, length, text}]}` | `{path, revision, dirty}` |
-| `document/save` | `{path, revision}` | `{path, revision, dirty}` |
+| `document/save` | `{path, revision}` | Document snapshot, including `savedText` |
 | `document/close` | `{path, revision, discard?: boolean}` | `null` |
 | `document/list` | `{}` | `{path, revision, dirty}[]` |
 
@@ -121,3 +121,32 @@ The host calls `session/end` only after the renderer completes its close
 prompts. It removes active journals, leaving unhandled recovery offers intact.
 `shutdown` by itself never clears journals. See architecture documentation for
 storage limits, atomic-write behavior and missing-path handling.
+
+## Filesystem changes and mutations (M4.2)
+
+| Method | Parameters | Result |
+|---|---|---|
+| `workspace/watch` | `{paths: string[], showExcluded?: boolean}` | Canonical directories (host only) |
+| `workspace/changes` | `{}` | `{root, directories: [{path, entries, error?}]}` |
+| `document/check` | `{path, revision}` | `{state, revision}` |
+| `document/reload` | `{path, revision, discard?: boolean}` | Document snapshot, incremented revision |
+| `file/create` | `{parent, name, directory?: boolean}` | `{path, directory}` |
+| `file/rename` | `{path, name}` | `{oldPath, path}` |
+| `file/delete` | `{path}` | `{path, trashPath}` |
+| `file/copy` | `{parent, name, path, revision}` or `{parent, name, recoveryId}` | `{path}` |
+
+The dedicated preload watch method passes the requested subscription through
+SML validation before installing native watchers. Notifications carry no
+assumed filesystem result: the renderer requests a scan. Disk states are
+`same`, `changed`, `missing`, `unreadable` or `replaced`. Checking a missing
+file retains a recovery record even when its text equals the saved baseline.
+Reload rejects dirty buffers unless discard is explicit, validates the current
+disk bytes and never overwrites them. The renderer serializes it with edits
+and freezes the affected editor while applying the returned snapshot.
+
+File policy errors use `-32050`. Mutations reject active builds, conflicting or
+unsaved affected documents, pending recovery buffers, protected roots and
+existing destinations. Rename preserves document revisions and remaps path
+prefixes in SML. Delete moves content into workspace trash and removes its
+active document records. Copy writes new content exclusively and retains the
+original record. See the architecture document for limitations and retention.

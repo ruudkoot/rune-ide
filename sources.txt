@@ -5,4 +5,6 @@ src/sml/session.sml
 src/sml/workspace.sml
 src/sml/documents.sml
 src/sml/build.sml
+src/sml/file-events.sml
+src/sml/file-ops.sml
 src/sml/service.sml

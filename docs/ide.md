@@ -66,12 +66,12 @@ and renames the sibling into place. M4.1 also flushes the parent directory
 before clearing the recovery record. Failed saves retain the dirty buffer.
 This is Linux replacement behavior, not a lock against another writer racing
 the final check or a guarantee against filesystem/hardware failure. ACLs, extended attributes,
-hard-link identity, Windows replacement semantics and file watchers are M4 work.
+hard-link identity, Windows replacement semantics need native validation; file watching is implemented in M4.2.
 
 Files larger than 512 KiB, non-UTF-8 data, binary/control characters, mixed
 line endings and lone-CR text are explicitly rejected in this first editor.
 Acknowledged edits have a separate recovery journal (M4.1, below). New file
-creation and rename remain follow-ups.
+creation, rename and workspace trash are implemented in M4.2.
 Tests edit temporary fixtures; the Rune checkout remains read-only.
 
 ## Compilation (M3)
@@ -174,8 +174,7 @@ After a crash, the recovery banner offers Restore or an explicitly confirmed
 Discard. Restore keeps the original saved baseline so externally changed
 sources still produce a save conflict. Restoring never writes source bytes.
 A record whose text already reached disk is recovered cleanly. Files or roots
-that disappeared are reported and their journals retained; automatic recreation
-or exporting a missing file is not implemented yet. Save, undo back to the saved
+that disappeared are reported and their journals retained; Save a copy can export a missing file into the current workspace (M4.2). Save, undo back to the saved
 baseline, or an accepted Discard clears the active record. Quitting normally
 clears only buffers handled by Save/Discard, keeping unhandled recovery offers.
 
@@ -202,3 +201,51 @@ Playwright sets `RUNE_IDE_TEST_BACKGROUND=1`: Electron creates a hidden window
 with offscreen rendering and background throttling disabled, so tests and
 screenshots run without raising a window or taking desktop focus. Normal app
 launches are visible.
+
+## File changes and operations (M4.2)
+
+Electron watches the root, expanded folders and parents of open documents.
+Native notifications are coalesced into 100 ms hints; a two-second fallback
+also runs when watching is unavailable or misses a change. SML compares
+snapshots and returns only changed directory listings. At most 128 distinct
+folders are watched, and folder links are not followed outside the workspace.
+Changing the subscription resends its snapshots, so rebuilding the tree does
+not depend on a new filesystem event. The watcher is disposed on exit and
+reset on workspace/service changes.
+
+Open documents are checked through their ordered request queues. A clean
+buffer reloads changed UTF-8 text automatically, retaining cursor/scroll
+positions. Reload resets undo history. Dirty, missing, unreadable or replaced
+files keep the editor text and display a banner; dirty reload requires an
+explicit Save/Discard/Cancel decision. Incoming local edits prevent an
+automatic reload from replacing their model. Saves acknowledge the actual
+saved text from SML, including when a disk reload was queued before Save.
+Affected compiler markers are cleared. A clean file removed externally also
+receives a recovery journal, and closing it asks whether to retain/discard it.
+
+Explorer provides New File, New Folder, Rename and Trash. SML validates names,
+canonical parents, existing destinations, protected workspace/IDE roots, and
+pending recovery records. Names obey portable filename restrictions. File
+operations reject symbolic-link sources, active builds and affected unsaved
+editors; save or close those editors first. Renaming an open file or directory
+updates every affected document/tab while preserving the same Monaco model
+and undo history. Models use stable internal URIs; SML paths remain the file
+identity at the protocol boundary. Source manifests and SML references are
+not rewritten by a filesystem rename.
+
+Trash moves contents to `.rune-ide/trash/<id>/contents/<name>` with a
+`restore.json` recording the original path. Open affected editors close only
+after a successful move. Trash is retained until the user removes it; there is
+no automatic purge or native OS trash integration. Restore manually using the
+recorded original path. Rename/trash use the platform filesystem operations;
+preflight checks do not lock out unrelated external writers.
+
+Save a copy writes an exclusive new file, preserving text, BOM and line
+endings. It is available for conflicting/missing editors and pending recovery
+records. Open a destination workspace first if the original root disappeared.
+Existing destinations are rejected. Copying keeps the original buffer/recovery
+record until an explicit close/discard decision.
+
+Tests cover external clean reload, conflicting local edits, missing files,
+coalesced/fallback notifications, rename with shared document identity and undo,
+protected paths/collisions, retained trash contents and recovery copies.

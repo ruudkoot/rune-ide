@@ -45,3 +45,21 @@ test('quit waits for preparation and cancels a late compiler child', { timeout: 
   await start; await closing;
   assert.equal(host.status.state, 'cancelled');
 });
+
+test('filesystem watcher coalesces bursts, retries missing folders and stops its fallback timer', { timeout: 5000 }, async () => {
+  const os = require('node:os'), path = require('node:path');
+  const { WorkspaceWatcher } = require('../src/host/workspace-watcher.ts');
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'rune-host-watch-'));
+  let pulses = 0; const watcher = new WorkspaceWatcher(() => pulses++, 150);
+  try {
+    watcher.configure([path.join(folder, 'late')]);
+    await new Promise(r => setTimeout(r, 300)); assert.ok(pulses > 0);
+    fs.mkdirSync(path.join(folder, 'late'));
+    watcher.configure([folder, path.join(folder, 'late')]);
+    const before = pulses;
+    for (let n = 0; n < 50; n++) fs.writeFileSync(path.join(folder, 'late', 'burst'), String(n));
+    await new Promise(r => setTimeout(r, 350)); assert.ok(pulses > before); assert.ok(pulses - before < 5);
+    watcher.close(); const stopped = pulses;
+    await new Promise(r => setTimeout(r, 250)); assert.equal(pulses, stopped);
+  } finally { watcher.close(); fs.rmSync(folder, { recursive: true, force: true }); }
+});

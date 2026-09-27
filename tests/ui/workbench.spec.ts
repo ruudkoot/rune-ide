@@ -221,3 +221,66 @@ test('restart a crashed SML service without losing the live editor or undo', asy
     fs.rmSync(folder, { recursive: true, force: true });
   }
 });
+
+test('watch external changes, retain conflicts, rename with undo, and move files to trash', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os');
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'rune-ui-files-'));
+  const file = path.join(folder, 'main.sml'); fs.writeFileSync(file, 'val n = 1\n');
+  const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  env.RUNE_IDE_USER_DATA = test.info().outputPath('profile');
+  delete env.ELECTRON_RUN_AS_NODE;
+  const app = await electron.launch({ executablePath: path.resolve('out/Rune-linux-x64/rune-ide'), env });
+  try {
+    const page = await app.firstWindow();
+    await expect(page.getByText('SML service connected')).toBeVisible();
+    await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, folder);
+    await page.getByRole('button', { name: 'Open folder', exact: true }).first().click();
+    await page.getByRole('row', { name: 'main.sml', exact: true }).dblclick();
+    const editor = page.getByRole('textbox', { name: 'Source editor ' + file, exact: true });
+    fs.writeFileSync(path.join(folder, 'external.sml'), 'val external = 1\n');
+    await expect(page.getByRole('row', { name: 'external.sml', exact: true })).toBeVisible();
+    fs.writeFileSync(file, 'val n = 2\n');
+    await expect.poll(async () => (await page.evaluate(file => window.rune.request<{ text: string }>('document/open', { path: file }), file)).text).toBe('val n = 2\n');
+    await editor.focus(); await page.keyboard.press('Control+End'); await page.keyboard.insertText('val local = 3');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect.poll(() => fs.readFileSync(file, 'utf8')).toContain('val local = 3');
+    await page.getByRole('row', { name: 'main.sml', exact: true }).click();
+    await page.getByRole('button', { name: 'Rename', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Name', exact: true }).fill('renamed.sml');
+    await page.getByRole('button', { name: 'Apply', exact: true }).click();
+    const renamed = path.join(folder, 'renamed.sml');
+    await expect(page.getByRole('tab', { name: 'renamed.sml', exact: true })).toBeVisible();
+    expect(fs.existsSync(file)).toBe(false);
+    const movedEditor = page.getByRole('textbox', { name: 'Source editor ' + renamed, exact: true });
+    await movedEditor.focus(); await page.keyboard.press('Control+z');
+    await expect(page.getByText('1 unsaved · Rune')).toBeVisible();
+    fs.writeFileSync(renamed, 'val disk = 9\n');
+    await expect(page.locator('.disk-banner')).toContainText('changed on disk');
+    await page.getByRole('button', { name: 'Save a copy', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Name', exact: true }).fill('rescued.sml');
+    await page.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(page.getByRole('tab', { name: 'rescued.sml', exact: true })).toBeVisible();
+    expect(fs.readFileSync(path.join(folder, 'rescued.sml'), 'utf8')).not.toBe('val disk = 9\n');
+    await page.getByRole('tab', { name: /renamed.sml/ }).click();
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
+    await page.getByRole('button', { name: 'Reload from disk' }).click();
+    await expect(page.locator('.disk-banner')).toHaveCount(0);
+    expect((await page.evaluate(file => window.rune.request<{ text: string }>('document/open', { path: file }), renamed)).text).toBe('val disk = 9\n');
+    await page.getByRole('row', { name: 'renamed.sml', exact: true }).click();
+    await page.getByRole('button', { name: 'Move to trash', exact: true }).click();
+    await page.getByRole('dialog', { name: 'File operation' }).getByRole('button', { name: 'Move to trash', exact: true }).click();
+    await expect(page.getByRole('tab', { name: /renamed.sml/ })).toHaveCount(0);
+    expect(fs.existsSync(renamed)).toBe(false);
+    const trash = fs.readdirSync(path.join(folder, '.rune-ide/trash'))[0];
+    expect(fs.readFileSync(path.join(folder, '.rune-ide/trash', trash, 'contents/renamed.sml'), 'utf8')).toBe('val disk = 9\n');
+    await page.getByRole('button', { name: 'New file', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Name', exact: true }).fill('created.sml');
+    await page.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(page.getByRole('tab', { name: 'created.sml', exact: true })).toBeVisible();
+    expect(fs.readFileSync(path.join(folder, 'created.sml'), 'utf8')).toBe('');
+    await page.screenshot({ path: 'test-results/file-operations.png' });
+  } finally {
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); }); await app.close();
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+});

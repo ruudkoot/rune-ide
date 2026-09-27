@@ -12,6 +12,11 @@ const bridge: RuneBridge = {
   toolchain: () => ipcRenderer.invoke('rune:toolchain'),
   chooseToolchain: () => ipcRenderer.invoke('rune:choose-toolchain'),
   restartService: () => ipcRenderer.invoke('rune:restart-service'),
+  watch: (paths, showExcluded) => ipcRenderer.invoke('rune:watch', { paths, showExcluded }),
+  onFilesChanged: listener => {
+    ipcRenderer.on('rune:files-changed', listener);
+    return () => ipcRenderer.removeListener('rune:files-changed', listener);
+  },
   onBuild: listener => {
     const handler = (_event: Electron.IpcRendererEvent, status: BuildStatus) => listener(status);
     ipcRenderer.on('rune:build', handler);

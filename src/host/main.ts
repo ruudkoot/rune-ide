@@ -3,6 +3,7 @@ import path from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { ServiceClient } from './service-client';
 import { BuildHost } from './build-host';
+import { WorkspaceWatcher } from './workspace-watcher';
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 let service: ServiceClient;
@@ -10,7 +11,8 @@ let window: BrowserWindow;
 let quitting = false;
 let acceptedClose = false;
 let builds: BuildHost;
-const methods = new Set(['ping', 'workspace/open', 'workspace/list', 'document/open', 'document/change', 'document/save', 'document/close', 'document/list', 'document/attach', 'build/targets', 'diagnostic/open', 'session/load', 'session/save', 'recovery/restore', 'recovery/discard']);
+let watcher: WorkspaceWatcher;
+const methods = new Set(['ping', 'workspace/open', 'workspace/list', 'workspace/changes', 'file/create', 'file/copy', 'file/rename', 'file/delete', 'document/open', 'document/change', 'document/check', 'document/reload', 'document/save', 'document/close', 'document/list', 'document/attach', 'build/targets', 'diagnostic/open', 'session/load', 'session/save', 'recovery/restore', 'recovery/discard']);
 if (process.env.RUNE_IDE_USER_DATA) {
   const userData = path.resolve(process.env.RUNE_IDE_USER_DATA);
   mkdirSync(userData, { recursive: true, mode: 0o700 });
@@ -38,6 +40,7 @@ if (primaryInstance) app.whenReady().then(() => {
     builds.on('status', status => { if (window && !window.isDestroyed()) window.webContents.send('rune:build', status); });
   };
   connect();
+  watcher = new WorkspaceWatcher(() => { if (!window.isDestroyed()) window.webContents.send('rune:files-changed'); });
   const backgroundTest = process.env.RUNE_IDE_TEST_BACKGROUND === '1';
   window = new BrowserWindow({ width: 1360, height: 900, minWidth: 760, minHeight: 500, title: 'Rune', backgroundColor: '#171a1f',
     show: !backgroundTest,
@@ -57,8 +60,12 @@ if (primaryInstance) app.whenReady().then(() => {
     if (typeof method !== 'string' || !methods.has(method)) throw new Error('Unsupported operation');
     await service.ready;
     const result = await service.request(method, params);
-    if (method === 'workspace/open') builds.reset();
+    if (method === 'workspace/open') { builds.reset(); watcher.configure([]); }
     return result;
+  });
+  ipcMain.handle('rune:watch', async (event, params: unknown) => {
+    checkSender(event); await service.ready;
+    watcher.configure(await service.request('workspace/watch', params) as string[]);
   });
   ipcMain.handle('rune:choose-folder', async (event) => {
     checkSender(event);
@@ -92,6 +99,7 @@ if (primaryInstance) app.whenReady().then(() => {
     if (restarting || builds.running) throw new Error('Finish or cancel the build before restarting the service');
     restarting = true;
     try {
+      watcher.configure([]);
       await builds.close(); await service.close(); service.removeAllListeners(); builds.removeAllListeners();
       connect(); window.webContents.send('rune:status', service.status);
       await service.ready;
@@ -134,5 +142,5 @@ if (primaryInstance) app.whenReady().then(() => {
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', (event) => {
   if (!acceptedClose && window && !window.isDestroyed()) { event.preventDefault(); window.webContents.send('rune:command', 'quit'); }
-  else if (!quitting && service) { event.preventDefault(); quitting = true; void builds.close().finally(() => service.close()).finally(() => app.quit()); }
+  else if (!quitting && service) { event.preventDefault(); quitting = true; watcher?.close(); void builds.close().finally(() => service.close()).finally(() => app.quit()); }
 });

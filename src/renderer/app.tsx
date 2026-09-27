@@ -1,13 +1,13 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Button, Checkbox, Tree, TreeItem, TreeItemContent, Collection, Key } from 'react-aria-components';
+import { Button, Checkbox, Tree, TreeItem, TreeItemContent, Collection, Key, ModalOverlay, Modal, Dialog, Heading, TextField, Label, Input } from 'react-aria-components';
 import { DockviewReact, DockviewReadyEvent, IDockviewPanelProps } from 'dockview-react';
 import * as monaco from 'monaco-editor/editor/editor.api.js';
 import 'monaco-editor/editor/contrib/find/browser/findController.js';
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard.js';
 import 'monaco-editor/editor/contrib/hover/browser/hoverContribution.js';
 import 'monaco-editor/editor/contrib/gotoError/browser/gotoError.js';
-import { BuildStatus, BuildTarget, Command, DirectoryEntry, DocumentSnapshot, RecoveryBuffer, ServiceStatus, SessionState, Workspace } from '../shared/protocol';
+import { BuildStatus, BuildTarget, Command, DirectoryEntry, DocumentSnapshot, RecoveryBuffer, ServiceStatus, SessionState, Workspace, WorkspaceChanges } from '../shared/protocol';
 import { EditorLayout, EditorStore } from './editor-store';
 import './sml-language';
 import 'dockview-react/dist/styles/dockview.css';
@@ -19,6 +19,8 @@ type Context = {
   expand: (keys: Set<Key>) => void; select: (keys: Set<Key>) => void; refresh: () => void;
   error: string; openFolder: () => void; store: EditorStore; showExcluded: boolean; toggleExcluded: (show: boolean) => void;
   build: BuildStatus;
+  saveCopy: (path: string, recoveryId?: string) => void;
+  fileAction: (kind: 'file' | 'folder' | 'rename' | 'delete') => void;
 };
 const Workbench = createContext<Context>(null!);
 
@@ -32,6 +34,12 @@ function Explorer() {
   </TreeItem>;
   return <section className="explorer">
     <div className="panel-tools"><span>{state.workspace?.name || 'WORKSPACE'}</span><Button aria-label="Refresh file tree" onPress={state.refresh} isDisabled={!state.workspace}>↻</Button></div>
+    {state.workspace && <div className="file-tools">
+      <Button aria-label="New file" onPress={() => state.fileAction('file')}>+ File</Button>
+      <Button aria-label="New folder" onPress={() => state.fileAction('folder')}>+ Folder</Button>
+      <Button onPress={() => state.fileAction('rename')} isDisabled={!state.selected.size}>Rename</Button>
+      <Button aria-label="Move to trash" onPress={() => state.fileAction('delete')} isDisabled={!state.selected.size}>Trash</Button>
+    </div>}
     {state.workspace ? <><Checkbox className="excluded-toggle" isSelected={state.showExcluded} onChange={state.toggleExcluded}><span className="check-box"/>Show excluded files</Checkbox>
       <Tree dependencies={[state.entries]} aria-label="Source files" selectionMode="single" selectionBehavior="replace" selectedKeys={state.selected} onSelectionChange={keys => state.select(keys as Set<Key>)} expandedKeys={state.expanded} onExpandedChange={state.expand} items={state.entries.get(state.workspace.path) || []}>{render}</Tree></>
       : <div className="empty"><p>Bring your sources<br/>into focus.</p><Button className="primary" onPress={state.openFolder}>Open folder</Button><small>Open a file with Enter or a double click.</small></div>}
@@ -47,7 +55,7 @@ function WelcomeEditor() {
   return <div ref={element} className="editor" aria-label="Welcome editor" />;
 }
 function EditorPanel(props: IDockviewPanelProps<{ path: string }>) {
-  const { store } = useContext(Workbench);
+  const { store, saveCopy } = useContext(Workbench);
   const element = useRef<HTMLDivElement>(null);
   const doc = store.documents.get(props.params.path);
   useEffect(() => {
@@ -65,7 +73,14 @@ function EditorPanel(props: IDockviewPanelProps<{ path: string }>) {
     return () => { const view = editor.saveViewState(); if (view) store.viewStates.set(props.api.id, view); store.editors.delete(props.api.id); focus.dispose(); cursor.dispose(); scroll.dispose(); active.dispose(); editor.dispose(); };
   }, [props.params.path, props.api, store, doc]);
   if (!doc) return <div className="empty"><p>This file has recoverable edits.</p><span>Use the recovery banner to restore or discard them.</span></div>;
-  return <div ref={element} className="editor" data-document={props.params.path} />;
+  return <div className="editor-pane">
+    {doc.diskState !== 'same' && <div className="disk-banner" role="status">
+      <span>{doc.diskState === 'missing' ? 'This file was removed from disk. Its text is still open.' : 'The file changed on disk. Your editor text has been retained.'}</span>
+      <Button onPress={() => saveCopy(doc.state.path)}>Save a copy</Button>
+      <Button onPress={() => store.run(store.reload(doc))} isDisabled={doc.diskState === 'missing' || doc.diskState === 'unreadable'}>Reload from disk</Button>
+    </div>}
+    <div ref={element} className="editor" data-document={props.params.path} />
+  </div>;
 }
 function DocumentTab(props: IDockviewPanelProps<{ path: string }>) {
   const { store } = useContext(Workbench);
@@ -120,6 +135,11 @@ function App() {
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [discardRecovery, setDiscardRecovery] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [fileDialog, setFileDialog] = useState<{ kind: 'file' | 'folder' | 'rename' | 'delete' | 'copy'; path: string; name: string; source?: string; recoveryId?: string } | null>(null);
+  const [fileError, setFileError] = useState('');
+  const [fileBusy, setFileBusy] = useState(false);
+  const scan = useRef<() => Promise<void>>(async () => {});
+  const scanning = useRef(false);
   const booted = useRef(false);
   const restoredRef = useRef(false);
   const sessionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -129,6 +149,27 @@ function App() {
   const closing = useRef(false);
   const activePath = store.active()?.state.path;
   const busyBuild = savingBuild || build.state === 'running';
+  const documentPaths = [...store.documents.keys()].join('\n');
+  const watchPaths = [...new Set([workspace?.path, ...Array.from(expanded, String), ...[...store.documents.values()].filter(d => !d.readOnly).map(d => d.state.path.slice(0, d.state.path.lastIndexOf('/')))].filter((p): p is string => !!p))];
+  useEffect(() => {
+    if (workspace && restored && status.state === 'ready' && !reconnecting) store.run(window.rune.watch(watchPaths, showExcluded));
+  }, [workspace, expanded, documentPaths, showExcluded, restored, status.state, reconnecting]);
+  scan.current = async () => {
+    if (!workspace || !restored || status.state !== 'ready' || store.suspended || scanning.current) return;
+    const root = workspace.path;
+    scanning.current = true;
+    try {
+      const result = await window.rune.request<WorkspaceChanges>('workspace/changes');
+      if (workspaceRef.current?.path !== root || result.root !== root) return;
+      if (result.directories.length) setEntries(previous => {
+        const next = new Map(previous);
+        for (const row of result.directories) next.set(row.path, row.entries);
+        return next;
+      });
+      await store.inspectDocuments();
+    } finally { scanning.current = false; }
+  };
+  useEffect(() => window.rune.onFilesChanged(() => store.run(scan.current())), [store]);
   persistSession.current = async () => {
     if (!workspace || !restoredRef.current || status.state !== 'ready') return;
     await window.rune.request('session/save', {
@@ -244,6 +285,46 @@ function App() {
   const refresh = (excluded = showExcluded) => {
     setError('');
     if (workspace) for (const path of [workspace.path, ...Array.from(expanded, String)]) store.run(load(path, excluded));
+    store.run(store.inspectDocuments());
+  };
+  const fileAction = (kind: 'file' | 'folder' | 'rename' | 'delete') => {
+    if (!workspace || busyBuild) return;
+    const selectedPath = String([...selected][0] || workspace.path);
+    const entry = [...entries.values()].flat().find(e => e.path === selectedPath);
+    const parent = !entry || entry.directory ? selectedPath : selectedPath.slice(0, selectedPath.lastIndexOf('/'));
+    setFileError(''); setFileDialog({ kind, path: kind === 'file' || kind === 'folder' ? parent : selectedPath, name: kind === 'rename' ? entry?.name || '' : '' });
+  };
+  const saveCopy = (path: string, recoveryId?: string) => {
+    if (!workspace) { setError('Open a destination folder before saving a recovery copy.'); return; }
+    setFileError(''); setFileDialog({ kind: 'copy', path: workspace.path, name: path.slice(path.lastIndexOf('/') + 1) + '.copy', source: path, recoveryId });
+  };
+  const mutateFile = async () => {
+    if (!fileDialog || fileBusy || busyBuild) return;
+    setFileBusy(true); setFileError(''); closing.current = true; store.suspend(true);
+    try {
+      await store.settle();
+      const { kind, path, name } = fileDialog;
+      if (kind === 'rename') {
+        const result = await window.rune.request<{ oldPath: string; path: string }>('file/rename', { path, name });
+        store.rename(result.oldPath, result.path);
+        setExpanded(keys => new Set([...keys].map(k => String(k) === path || String(k).startsWith(path + '/') ? result.path + String(k).slice(path.length) : k)));
+        setSelected(new Set([result.path]));
+      } else if (kind === 'delete') {
+        await window.rune.request('file/delete', { path }); store.removed(path);
+        setExpanded(keys => new Set([...keys].filter(k => String(k) !== path && !String(k).startsWith(path + '/')))); setSelected(new Set());
+      } else if (kind === 'copy') {
+        const doc = fileDialog.source ? store.documents.get(fileDialog.source) : undefined;
+        const result = await window.rune.request<{ path: string }>('file/copy', { parent: path, name, path: fileDialog.source, revision: doc?.state.revision, recoveryId: fileDialog.recoveryId });
+        await store.open(result.path); setSelected(new Set([result.path]));
+      } else {
+        const result = await window.rune.request<{ path: string }>('file/create', { parent: path, name, directory: kind === 'folder' });
+        setExpanded(keys => new Set([...keys, path])); setSelected(new Set([result.path]));
+        if (kind === 'file') await store.open(result.path);
+      }
+      setFileDialog(null); setEntries(new Map());
+      if (workspace) await load(workspace.path);
+    } catch (error) { setFileError((error as Error).message); }
+    finally { setFileBusy(false); closing.current = false; store.suspend(status.state !== 'ready'); }
   };
   const expand = (keys: Set<Key>) => { setExpanded(keys); for (const key of keys) if (!entries.has(String(key))) store.run(load(String(key))); };
   const reveal = async () => {
@@ -297,8 +378,18 @@ function App() {
     event.api.onDidLayoutChange(() => store.sessionChanged());
     setLayoutReady(true);
   };
-  const value: Context = { workspace, entries, expanded, selected, expand, select: setSelected, error, openFolder, store, build, showExcluded, toggleExcluded: show => { setShowExcluded(show); refresh(show); }, refresh: () => refresh() };
+  const value: Context = { workspace, entries, expanded, selected, expand, select: setSelected, error, openFolder, store, build, showExcluded, fileAction, saveCopy, toggleExcluded: show => { setShowExcluded(show); refresh(show); }, refresh: () => refresh() };
   return <Workbench.Provider value={value}><div className="application">
+    <ModalOverlay isOpen={!!fileDialog} onOpenChange={open => { if (!open && !fileBusy) setFileDialog(null); }} isDismissable={!fileBusy}>
+      <Modal><Dialog aria-label="File operation"><form onSubmit={event => { event.preventDefault(); void mutateFile(); }}>
+        <Heading slot="title">{fileDialog?.kind === 'delete' ? 'Move to workspace trash?' : fileDialog?.kind === 'rename' ? 'Rename' : fileDialog?.kind === 'copy' ? 'Save a copy' : 'New ' + fileDialog?.kind}</Heading>
+        <p className="dialog-path">{fileDialog?.path}</p>
+        {fileDialog?.kind === 'delete' ? <p>Saved files are kept in .rune-ide/trash. Open editors for these files will close.</p> :
+          <TextField autoFocus value={fileDialog?.name || ''} onChange={name => setFileDialog(previous => previous && ({ ...previous, name }))}><Label>Name</Label><Input /></TextField>}
+        {fileError && <p className="error" role="alert">{fileError}</p>}
+        <div className="dialog-buttons"><Button onPress={() => setFileDialog(null)} isDisabled={fileBusy}>Cancel</Button><Button type="submit" className="primary" isDisabled={fileBusy}>{fileDialog?.kind === 'delete' ? 'Move to trash' : 'Apply'}</Button></div>
+      </form></Dialog></Modal>
+    </ModalOverlay>
     <header><div className="brand"><span className="brand-mark">R</span> RUNE <span className="edition">STANDARD ML</span></div><span className="workspace-title">{workspace?.name || 'A place to think in types'}</span>
       <Button className="toolbar-button" onPress={() => command('reveal')} isDisabled={!store.active()}>Reveal</Button>
       <Button className="toolbar-button" onPress={() => command('split')} isDisabled={!store.active()}>Split editor</Button>
@@ -326,6 +417,7 @@ function App() {
           <Button onPress={() => setDiscardRecovery(null)}>Keep</Button>
         </> : <>
           <Button onPress={() => store.run(recoverBuffer(buffer))} isDisabled={recoveryBusy || !restored}>Restore</Button>
+          <Button onPress={() => saveCopy(buffer.path, buffer.id)} isDisabled={recoveryBusy || !restored}>Save a copy</Button>
           <Button onPress={() => setDiscardRecovery(buffer.id)} isDisabled={recoveryBusy || !restored}>Discard</Button>
         </>}
       </div>)}

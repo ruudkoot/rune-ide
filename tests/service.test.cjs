@@ -289,3 +289,75 @@ test('recovery quotas preserve excess records and unavailable paths without ackn
   assert.ok((await second.ask('workspace/open', { path: path.join(folder, 'gone') })).error);
   assert.equal((await second.ask('session/load')).result.recovery.length, 64);
 });
+
+test('filesystem rescans coalesce unchanged directories and reloads preserve conflicting edits', { timeout: 10000 }, async t => {
+  const folder = mkdtempSync(path.join(tmpdir(), 'rune-watch-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const file = path.join(folder, 'main.sml'); writeFileSync(file, 'val n = 0\n');
+  const { ask } = service(t); await ask('initialize', { protocol: 1 }); await ask('workspace/open', { path: folder });
+  assert.deepEqual((await ask('workspace/watch', { paths: [folder, folder], showExcluded: false })).result, [folder]);
+  assert.equal((await ask('workspace/changes')).result.directories.length, 1);
+  assert.equal((await ask('workspace/changes')).result.directories.length, 0);
+  writeFileSync(path.join(folder, 'new.sml'), '');
+  assert.equal((await ask('workspace/changes')).result.directories[0].entries.length, 2);
+  assert.ok((await ask('workspace/watch', { paths: ['/tmp'] })).error);
+  await ask('document/open', { path: file });
+  writeFileSync(file, '\ufeffval n = 1\r\n');
+  assert.equal((await ask('document/check', { path: file, revision: 0 })).result.state, 'changed');
+  const loaded = (await ask('document/reload', { path: file, revision: 0 })).result;
+  assert.equal(loaded.text, 'val n = 1\r\n'); assert.equal(loaded.bom, true); assert.equal(loaded.revision, 1);
+  await ask('document/change', { path: file, revision: 1, changes: [{ offset: 8, length: 1, text: '2' }] });
+  writeFileSync(file, 'val n = 3\n');
+  assert.ok((await ask('document/reload', { path: file, revision: 2 })).error);
+  assert.equal((await ask('document/open', { path: file })).result.text, 'val n = 2\r\n');
+  assert.ok((await ask('document/reload', { path: file, revision: 1, discard: true })).error);
+  const discarded = (await ask('document/reload', { path: file, revision: 2, discard: true })).result;
+  assert.equal(discarded.text, 'val n = 3\n'); assert.equal(discarded.dirty, false);
+  rmSync(file); assert.equal((await ask('document/check', { path: file, revision: 3 })).result.state, 'missing');
+  assert.ok((await ask('document/reload', { path: file, revision: 3 })).error);
+});
+
+test('SML file operations protect open edits, collisions and roots, and retain deleted contents in trash', { timeout: 10000 }, async t => {
+  const { readFileSync, existsSync } = require('node:fs');
+  const folder = mkdtempSync(path.join(tmpdir(), 'rune-files-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const { ask } = service(t); await ask('initialize', { protocol: 1 }); await ask('workspace/open', { path: folder });
+  const dir = (await ask('file/create', { parent: folder, name: 'src λ', directory: true })).result.path;
+  const file = (await ask('file/create', { parent: dir, name: 'main.sml' })).result.path;
+  assert.ok((await ask('file/create', { parent: dir, name: 'main.sml' })).error);
+  assert.ok((await ask('file/create', { parent: folder, name: '../outside' })).error);
+  assert.ok((await ask('file/delete', { path: folder })).error);
+  symlinkSync(dir, path.join(folder, 'link'));
+  assert.ok((await ask('file/delete', { path: path.join(folder, 'link') })).error);
+  await ask('document/open', { path: file });
+  await ask('document/change', { path: file, revision: 0, changes: [{ offset: 0, length: 0, text: 'val n = 42\n' }] });
+  assert.match((await ask('file/rename', { path: dir, name: 'renamed' })).error.message, /unsaved/);
+  assert.match((await ask('file/delete', { path: dir })).error.message, /unsaved/);
+  await ask('document/save', { path: file, revision: 1 });
+  const renamed = (await ask('file/rename', { path: dir, name: 'renamed' })).result.path;
+  assert.equal((await ask('document/list')).result[0].path, path.join(renamed, 'main.sml'));
+  assert.equal((await ask('document/open', { path: path.join(renamed, 'main.sml') })).result.revision, 1);
+  const trashed = (await ask('file/delete', { path: renamed })).result;
+  assert.equal(existsSync(renamed), false); assert.equal(readFileSync(path.join(trashed.trashPath, 'main.sml'), 'utf8'), 'val n = 42\n');
+  assert.deepEqual((await ask('document/list')).result, []);
+  assert.ok((await ask('file/delete', { path: path.join(folder, '.rune-ide') })).error);
+});
+
+test('a removed clean file is journalled and its recovery copy is exclusive and preserves BOM', { timeout: 10000 }, async t => {
+  const { readFileSync } = require('node:fs');
+  const folder = mkdtempSync(path.join(tmpdir(), 'rune-missing-copy-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const stateDir = path.join(folder, 'state'), file = path.join(folder, 'gone.sml');
+  const source = '\ufeffval smile = "🙂"\r\n'; writeFileSync(file, source);
+  const first = service(t); await first.ask('initialize', { protocol: 1, stateDir }); await first.ask('workspace/open', { path: folder });
+  await first.ask('document/open', { path: file }); rmSync(file);
+  assert.equal((await first.ask('document/check', { path: file, revision: 0 })).result.state, 'missing');
+  const exit = new Promise(resolve => first.child.once('exit', resolve)); await first.ask('shutdown'); await exit;
+  const second = service(t); await second.ask('initialize', { protocol: 1, stateDir }); await second.ask('workspace/open', { path: folder });
+  const record = (await second.ask('session/load')).result.recovery[0]; assert.equal(record.path, file);
+  const copy = (await second.ask('file/copy', { recoveryId: record.id, parent: folder, name: 'rescued.sml' })).result;
+  assert.equal(readFileSync(copy.path, 'utf8'), source);
+  assert.ok((await second.ask('file/copy', { recoveryId: record.id, parent: folder, name: 'rescued.sml' })).error);
+  assert.equal(readFileSync(copy.path, 'utf8'), source);
+  assert.equal((await second.ask('session/load')).result.recovery.length, 1);
+});

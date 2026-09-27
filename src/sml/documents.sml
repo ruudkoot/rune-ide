@@ -3,7 +3,7 @@ structure Documents =
 struct
   exception Invalid of string
   type document = {path : string, text : string ref, saved : string ref,
-                   revision : int ref, bom : bool}
+                   revision : int ref, bom : bool ref}
   val documents : document list ref = ref []
   val limit = 512 * 1024
   val bom = "\239\187\191"
@@ -32,7 +32,7 @@ struct
   fun summary (d : document) = Json.Object [("path", Json.String (#path d)),
     ("revision", Json.int (!(#revision d))), ("dirty", Json.Bool (dirty d))]
   fun snapshot (d : document) = case summary d of Json.Object fields =>
-      Json.Object (("text", Json.String (!(#text d))) :: ("savedText", Json.String (!(#saved d))) :: ("bom", Json.Bool (#bom d)) :: fields)
+      Json.Object (("text", Json.String (!(#text d))) :: ("savedText", Json.String (!(#saved d))) :: ("bom", Json.Bool (!(#bom d))) :: fields)
     | _ => raise Fail "document summary"
   fun find path = case List.find (fn (d : document) => #path d = path) (!documents) of
       SOME d => d | NONE => raise Invalid "document is not open"
@@ -45,7 +45,7 @@ struct
                   val hasBom = String.isPrefix bom raw
                   val text = if hasBom then String.extract (raw, 3, NONE) else raw
                   val () = validate text
-                  val d = {path = path, text = ref text, saved = ref text, revision = ref 0, bom = hasBom}
+                  val d = {path = path, text = ref text, saved = ref text, revision = ref 0, bom = ref hasBom}
               in documents := d :: !documents; snapshot d end
     end
   fun checked params =
@@ -71,13 +71,34 @@ struct
               else apply (rest, String.substring (current, 0, a) ^ text ^ String.extract (current, b, NONE), a)
         val text = apply (edits, original, String.size original)
         val () = validate text
-        val () = Session.put (Workspace.current (), #path d, text, !(#saved d), !(#revision d) + 1, #bom d)
+        val journal = if OS.FileSys.access (#path d, []) then Session.put else Session.retain
+        val () = journal (Workspace.current (), #path d, text, !(#saved d), !(#revision d) + 1, !(#bom d))
     in #text d := text; #revision d := !(#revision d) + 1; summary d end
-  fun diskText (d : document) text = (if #bom d then bom else "") ^ text
+  fun diskText (d : document) text = (if !(#bom d) then bom else "") ^ text
   fun checkDisk (d : document) =
     if Workspace.resolve (#path d) <> #path d orelse read (#path d) <> diskText d (!(#saved d))
     then raise Invalid "file changed on disk; your edits are retained. Close and discard, then reopen to load the disk version"
     else ()
+  fun diskState (d : document) =
+    ((if Workspace.resolve (#path d) <> #path d then "replaced"
+      else if read (#path d) = diskText d (!(#saved d)) then "same" else "changed")
+     handle _ => if OS.FileSys.access (#path d, []) then "unreadable" else "missing")
+  fun inspect params =
+    let val d = checked params
+        val state = diskState d
+        val args = (Workspace.current (), #path d, !(#text d), !(#saved d), !(#revision d), !(#bom d))
+        val () = if state = "missing" then Session.retain args else if state = "same" andalso not (dirty d) then Session.put args else ()
+    in Json.Object [("state", Json.String state), ("revision", Json.int (!(#revision d)))] end
+  fun reload params =
+    let val d = checked params
+        val () = if dirty d andalso Json.field params "discard" <> Json.Bool true then raise Invalid "reload would discard unsaved edits" else ()
+        val () = if Workspace.resolve (#path d) = #path d then () else raise Invalid "file identity changed; close and reopen it"
+        val raw = read (#path d)
+        val hasBom = String.isPrefix bom raw
+        val text = if hasBom then String.extract (raw, 3, NONE) else raw
+        val () = validate text
+        val () = Session.forget (Workspace.current (), #path d)
+    in #text d := text; #saved d := text; #bom d := hasBom; #revision d := !(#revision d) + 1; snapshot d end
   val serial = ref 0
   fun save params =
     let val d = checked params
@@ -99,7 +120,7 @@ struct
                         Posix.IO.close fd; closed := true; checkDisk d;
                         OS.FileSys.rename {old = temp, new = path}; Disk.syncDirectory (OS.Path.dir path))
         val () = finish () handle e => (cleanup (); raise e)
-    in #saved d := !(#text d); Session.forget (Workspace.current (), #path d); summary d end
+    in #saved d := !(#text d); Session.forget (Workspace.current (), #path d); snapshot d end
   fun closeFile params =
     let val d = checked params
         val () = if dirty d andalso Json.field params "discard" <> Json.Bool true
@@ -125,7 +146,7 @@ struct
         val baseline = if alreadySaved then text else saved
         val () = Session.put (Workspace.current (), path, text, baseline, 0, hasBom)
         val () = Session.activate (Workspace.current (), path)
-        val d = {path = path, text = ref text, saved = ref baseline, revision = ref 0, bom = hasBom}
+        val d = {path = path, text = ref text, saved = ref baseline, revision = ref 0, bom = ref hasBom}
     in documents := d :: !documents; snapshot d end
   fun recover id =
     let val data = Session.find id
@@ -139,7 +160,7 @@ struct
         val () = validate saved
         val alreadySaved = (read path = (if hasBom then bom else "") ^ text handle _ => false)
         val baseline = if alreadySaved then text else saved
-        val d = {path = path, text = ref text, saved = ref baseline, revision = ref 0, bom = hasBom}
+        val d = {path = path, text = ref text, saved = ref baseline, revision = ref 0, bom = ref hasBom}
         val () = if alreadySaved then Session.forget (Workspace.current (), path)
                  else Session.put (Workspace.current (), path, text, baseline, 0, hasBom)
         val () = Session.activate (Workspace.current (), path)

@@ -19,14 +19,22 @@ struct
             val result = Workspace.openFolder (Json.getString params "path")
             val () = Session.setWorkspace (Workspace.current ())
                      handle e => (Workspace.root := previous; raise e)
-        in Documents.reset (); Build.reset (); result end)
+        in Documents.reset (); Build.reset (); FileEvents.reset (); result end)
     | "workspace/list" => Workspace.listDirectory (Json.getString params "path", Json.field params "showExcluded" = Json.Bool true)
+    | "workspace/watch" => FileEvents.configure params
+    | "workspace/changes" => FileEvents.changes ()
+    | "file/create" => FileOps.create params
+    | "file/copy" => FileOps.copy params
+    | "file/rename" => FileOps.rename params
+    | "file/delete" => FileOps.delete params
     | "document/open" => Documents.openFile (Json.getString params "path")
     | "document/change" => Documents.change params
     | "document/save" => Documents.save params
     | "document/close" => Documents.closeFile params
     | "document/list" => Documents.list ()
     | "document/attach" => Documents.attach params
+    | "document/check" => Documents.inspect params
+    | "document/reload" => Documents.reload params
     | "session/load" => Session.load ()
     | "session/save" => Session.save params
     | "session/end" => Documents.endSession ()
@@ -53,6 +61,7 @@ struct
        | Documents.Invalid m => error id (~32020) m
        | Session.Invalid m => error id (~32040) m
        | Disk.Invalid m => error id (~32040) m
+       | FileOps.Invalid m => error id (~32050) m
        | Build.Invalid m => error id (~32030) m
        | e => error id (~32000) (General.exnMessage e)
     end

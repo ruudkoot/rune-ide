@@ -107,8 +107,8 @@ struct
         val () = case !directory of NONE => () | SOME dir =>
           List.app (fn (d : draft) => Disk.remove (OS.Path.concat (dir, #id d))) matches
     in activate (ws, path); drafts := List.filter (fn d => not (same (ws, path) d)) (!drafts) end
-  fun put (ws, path, text, saved, revision, bom) =
-    if text = saved then forget (ws, path)
+  fun putWith preserve (ws, path, text, saved, revision, bom) =
+    if text = saved andalso not preserve then forget (ws, path)
     else case !directory of NONE => () | SOME dir =>
       let val data = Json.Object [("version", Json.int 1), ("workspace", Json.String ws),
              ("path", Json.String path), ("text", Json.String text), ("saved", Json.String saved),
@@ -120,9 +120,13 @@ struct
           fun fresh () =
             let val () = next := !next + 1 val name = "buffer-" ^ Int.toString (!next) ^ ".json"
             in if Disk.exists (OS.Path.concat (dir, name)) then fresh () else name end
-          val id = case List.find (same (ws, path)) (!drafts) of SOME d => #id d | NONE => fresh ()
-          val () = Disk.atomic (OS.Path.concat (dir, id), raw)
+          val existing = List.find (same (ws, path)) (!drafts)
+          val id = case existing of SOME d => #id d | NONE => fresh ()
+          val unchanged = case existing of SOME d => #data d = data | NONE => false
+          val () = if unchanged then () else Disk.atomic (OS.Path.concat (dir, id), raw)
       in drafts := {id = id, data = data, size = String.size raw} :: rest end
+  fun put args = putWith false args
+  fun retain args = putWith true args
   fun find id = case List.find (fn (d : draft) => #id d = id) (!drafts) of
     SOME d => #data d | NONE => raise Invalid "recovery buffer no longer exists"
   fun discard id =

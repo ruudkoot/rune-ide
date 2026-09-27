@@ -43,3 +43,15 @@ header { gap: 12px; }
 .recovery-row > span:first-child { flex: 1; overflow-wrap: anywhere; color: #b8c9ad; }
 .recovery-row button { border: 1px solid #637159; padding: 5px 10px; flex-shrink: 0; }
 .error-banner { display: flex; align-items: center; gap: 14px; justify-content: space-between; }
+.editor-pane { height: 100%; display: flex; flex-direction: column; }
+.editor-pane > .editor { flex: 1; min-height: 0; }
+.disk-banner { display: flex; gap: 12px; align-items: center; padding: 8px 14px; background: #453b25; font-size: 12px; }
+.disk-banner span { flex: 1; }.disk-banner button { flex-shrink: 0; border: 1px solid #9b864f; padding: 5px; }
+.file-tools { display: flex; gap: 6px; padding: 0 10px 8px; flex-wrap: wrap; font-size: 10px; }
+.file-tools button { padding: 4px; border: 1px solid #414955; }
+.react-aria-ModalOverlay { position: fixed; inset: 0; z-index: 1000; background: #0008; display: flex; align-items: center; justify-content: center; }
+.react-aria-Modal { width: min(520px, 90vw); background: #222730; border: 1px solid #566171; border-radius: 8px; padding: 24px; box-shadow: 0 15px 60px #0008; }
+.react-aria-Dialog { outline: none; }.react-aria-Dialog h2 { margin-top: 0; font-size: 18px; }
+.dialog-path { overflow-wrap: anywhere; color: #aab5c2; }.react-aria-TextField { display: flex; flex-direction: column; gap: 8px; }
+.react-aria-Input { background: #171a1f; color: #e3e8ef; border: 1px solid #596879; padding: 8px; font: inherit; }
+.dialog-buttons { display: flex; gap: 16px; justify-content: flex-end; margin-top: 20px; }
