@@ -361,3 +361,34 @@ test('a removed clean file is journalled and its recovery copy is exclusive and 
   assert.equal(readFileSync(copy.path, 'utf8'), source);
   assert.equal((await second.ask('session/load')).result.recovery.length, 1);
 });
+
+test('SML commands filter by all query terms, gate context and validate themes', { timeout: 5000 }, async t => {
+  const { ask } = service(t); await ask('initialize', { protocol: 1, defaultToolchain: '/bundled' });
+  const rows = (await ask('commands/list')).result;
+  assert.equal(new Set(rows.map(row => row.id)).size, rows.length);
+  assert.equal(rows.find(row => row.id === 'save').enabled, false);
+  const context = { ready: true, workspace: true, editor: true, readOnly: true, documents: true };
+  assert.equal((await ask('commands/list', { query: ' SAVE File ', context })).result.length, 2);
+  assert.equal((await ask('commands/list', { query: 'save', context })).result.find(row => row.id === 'save').enabled, false);
+  assert.equal((await ask('commands/list', { query: 'save', context: { ...context, readOnly: false } })).result.find(row => row.id === 'save').enabled, true);
+  assert.equal((await ask('commands/list', { query: 'Save Build', context: { ...context, busy: true } })).result[0].enabled, false);
+  assert.equal((await ask('commands/list', { query: 'x'.repeat(257) })).error.code, -32602);
+  assert.equal((await ask('session/save', { view: null, settings: { theme: 'unknown' } })).error.code, -32040);
+  assert.equal((await ask('session/save', { view: null, settings: { theme: 'light', toolchain: '/bundled' } })).result, null);
+  await ask('session/toolchain', { path: '/external' });
+  const session = (await ask('session/load')).result;
+  assert.equal(session.settings.theme, 'light'); assert.equal(session.settings.toolchain, '/external');
+});
+
+test('open document capacity recovers after close without evicting text', { timeout: 10000 }, async t => {
+  const folder = mkdtempSync(path.join(tmpdir(), 'rune-capacity-')); t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const { ask } = service(t); await ask('initialize', { protocol: 1 }); await ask('workspace/open', { path: folder });
+  for (let n = 0; n < 129; n++) {
+    const file = path.join(folder, n + '.sml'); writeFileSync(file, 'val x = 1\n');
+    const reply = await ask('document/open', { path: file });
+    if (n < 128) assert.ok(reply.result); else assert.match(reply.error.message, /128 documents/);
+  }
+  assert.equal((await ask('document/list')).result.length, 128);
+  await ask('document/close', { path: path.join(folder, '0.sml'), revision: 0 });
+  assert.ok((await ask('document/open', { path: path.join(folder, '128.sml') })).result);
+});

@@ -5,6 +5,7 @@ struct
   type document = {path : string, text : string ref, saved : string ref,
                    revision : int ref, bom : bool ref}
   val documents : document list ref = ref []
+  fun capacity () = if List.length (!documents) >= 128 then raise Invalid "128 documents are open; close some editors first" else ()
   val limit = 512 * 1024
   val bom = "\239\187\191"
   fun read path =
@@ -40,13 +41,14 @@ struct
     let val path = Workspace.resolve path
     in case List.find (fn (d : document) => #path d = path) (!documents) of
       SOME d => snapshot d
-    | NONE => let val () = if Session.pending (Workspace.current (), path) then raise Invalid "This file has recoverable edits. Restore or discard them in the recovery banner first." else ()
+    | NONE => let val () = capacity ()
+                  val () = if Session.pending (Workspace.current (), path) then raise Invalid "This file has recoverable edits. Restore or discard them in the recovery banner first." else ()
                   val raw = read path
                   val hasBom = String.isPrefix bom raw
                   val text = if hasBom then String.extract (raw, 3, NONE) else raw
                   val () = validate text
                   val d = {path = path, text = ref text, saved = ref text, revision = ref 0, bom = ref hasBom}
-              in documents := d :: !documents; snapshot d end
+              in capacity (); documents := d :: !documents; snapshot d end
     end
   fun checked params =
     let val d = find (Json.getString params "path")
@@ -147,7 +149,7 @@ struct
         val () = Session.put (Workspace.current (), path, text, baseline, 0, hasBom)
         val () = Session.activate (Workspace.current (), path)
         val d = {path = path, text = ref text, saved = ref baseline, revision = ref 0, bom = ref hasBom}
-    in documents := d :: !documents; snapshot d end
+    in capacity (); documents := d :: !documents; snapshot d end
   fun recover id =
     let val data = Session.find id
         val () = if Json.getString data "workspace" = Workspace.current () then () else raise Invalid "Open the original workspace before restoring this buffer"
@@ -164,5 +166,5 @@ struct
         val () = if alreadySaved then Session.forget (Workspace.current (), path)
                  else Session.put (Workspace.current (), path, text, baseline, 0, hasBom)
         val () = Session.activate (Workspace.current (), path)
-    in documents := d :: !documents; snapshot d end
+    in capacity (); documents := d :: !documents; snapshot d end
 end

@@ -1,13 +1,14 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useContext, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Button, Checkbox, Tree, TreeItem, TreeItemContent, Collection, Key, ModalOverlay, Modal, Dialog, Heading, TextField, Label, Input } from 'react-aria-components';
+import { Button, Checkbox, Virtualizer, ListLayout, Tree, TreeItem, TreeItemContent, Collection, Key, ModalOverlay, Modal, Dialog, Heading, TextField, Label, Input } from 'react-aria-components';
 import { DockviewReact, DockviewReadyEvent, IDockviewPanelProps } from 'dockview-react';
 import * as monaco from 'monaco-editor/editor/editor.api.js';
 import 'monaco-editor/editor/contrib/find/browser/findController.js';
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard.js';
 import 'monaco-editor/editor/contrib/hover/browser/hoverContribution.js';
 import 'monaco-editor/editor/contrib/gotoError/browser/gotoError.js';
-import { BuildStatus, BuildTarget, Command, DirectoryEntry, DocumentSnapshot, RecoveryBuffer, ServiceStatus, SessionState, Workspace, WorkspaceChanges } from '../shared/protocol';
+import { BuildStatus, BuildTarget, Command, CommandInfo, CommandContext, Theme, DirectoryEntry, DocumentSnapshot, RecoveryBuffer, ServiceStatus, SessionState, Workspace, WorkspaceChanges } from '../shared/protocol';
+import { CommandPalette } from './command-palette';
 import { EditorLayout, EditorStore } from './editor-store';
 import './sml-language';
 import 'dockview-react/dist/styles/dockview.css';
@@ -24,14 +25,18 @@ type Context = {
 };
 const Workbench = createContext<Context>(null!);
 
-function Explorer() {
-  const state = useContext(Workbench);
-  const render = (entry: DirectoryEntry): React.ReactElement => <TreeItem key={entry.path} id={entry.path} textValue={entry.name} hasChildItems={entry.directory && !entry.symlink}
+const SourceTree = React.memo(function SourceTree(state: Pick<Context, 'workspace' | 'entries' | 'expanded' | 'selected' | 'select' | 'expand' | 'store'>) {
+  const render = useCallback(function render(entry: DirectoryEntry): React.ReactElement { return <TreeItem key={entry.path} id={entry.path} textValue={entry.name} hasChildItems={entry.directory && !entry.symlink}
     onAction={() => { if (!entry.directory) state.store.run(state.store.open(entry.path)); }}>
     <TreeItemContent>{({ isExpanded }) => <>{entry.directory && !entry.symlink ? <Button slot="chevron" className="chevron">{isExpanded ? '⌄' : '›'}</Button> : <span className="chevron"/>}<span className={entry.directory ? 'folder-icon' : 'file-icon'}>{entry.directory ? '▱' : 'λ'}</span><span>{entry.name}</span>{entry.symlink && <span className="muted"> ↗</span>}</>}</TreeItemContent>
     <Collection dependencies={[state.entries]} items={state.entries.get(entry.path) || []}>{render}</Collection>
     {entry.directory && !entry.symlink && !state.entries.get(entry.path)?.length && <TreeItem id={`${entry.path}/:placeholder`} textValue="Directory status" isDisabled><TreeItemContent><span className="muted">{state.entries.has(entry.path) ? 'Empty folder' : 'Loading…'}</span></TreeItemContent></TreeItem>}
-  </TreeItem>;
+  </TreeItem>; }, [state.entries, state.store]);
+  return <Virtualizer layout={ListLayout} layoutOptions={{ rowHeight: 28 }}><Tree dependencies={[state.entries]} aria-label="Source files" selectionMode="single" selectionBehavior="replace" selectedKeys={state.selected} onSelectionChange={keys => state.select(keys as Set<Key>)} expandedKeys={state.expanded} onExpandedChange={state.expand} items={state.entries.get(state.workspace!.path) || []}>{render}</Tree></Virtualizer>;
+});
+
+function Explorer() {
+  const state = useContext(Workbench);
   return <section className="explorer">
     <div className="panel-tools"><span>{state.workspace?.name || 'WORKSPACE'}</span><Button aria-label="Refresh file tree" onPress={state.refresh} isDisabled={!state.workspace}>↻</Button></div>
     {state.workspace && <div className="file-tools">
@@ -41,11 +46,11 @@ function Explorer() {
       <Button aria-label="Move to trash" onPress={() => state.fileAction('delete')} isDisabled={!state.selected.size}>Trash</Button>
     </div>}
     {state.workspace ? <><Checkbox className="excluded-toggle" isSelected={state.showExcluded} onChange={state.toggleExcluded}><span className="check-box"/>Show excluded files</Checkbox>
-      <Tree dependencies={[state.entries]} aria-label="Source files" selectionMode="single" selectionBehavior="replace" selectedKeys={state.selected} onSelectionChange={keys => state.select(keys as Set<Key>)} expandedKeys={state.expanded} onExpandedChange={state.expand} items={state.entries.get(state.workspace.path) || []}>{render}</Tree></>
+      <SourceTree workspace={state.workspace} entries={state.entries} expanded={state.expanded} selected={state.selected} select={state.select} expand={state.expand} store={state.store} /></>
       : <div className="empty"><p>Bring your sources<br/>into focus.</p><Button className="primary" onPress={state.openFolder}>Open folder</Button><small>Open a file with Enter or a double click.</small></div>}
   </section>;
 }
-const editorOptions: monaco.editor.IStandaloneEditorConstructionOptions = { theme: 'rune', fontSize: 14, fontFamily: '"DejaVu Sans Mono", monospace', minimap: { enabled: false }, automaticLayout: true, padding: { top: 18 }, scrollBeyondLastLine: false };
+const editorOptions: monaco.editor.IStandaloneEditorConstructionOptions = { fontSize: 14, fontFamily: '"DejaVu Sans Mono", monospace', minimap: { enabled: false }, automaticLayout: true, padding: { top: 18 }, scrollBeyondLastLine: false };
 function WelcomeEditor() {
   const element = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -96,13 +101,13 @@ function Output() {
     if (box.scrollTop + box.clientHeight >= height.current - 20) box.scrollTop = box.scrollHeight;
     height.current = box.scrollHeight;
   }, [build.log]);
-  return <div ref={element} className="output">{error && <p className="error" role="alert">{error}</p>}
+  return <div ref={element} className="output" tabIndex={-1} aria-label="Build output">{error && <p className="error" role="alert">{error}</p>}
     {build.log ? <pre>{build.log}</pre> : <><p className="output-line"><span className="good">●</span> Workbench ready</p><p className="muted">Enter opens a file · Ctrl+S saves · Ctrl+Shift+B builds</p></>}
   </div>;
 }
 function Problems() {
   const { build, store } = useContext(Workbench);
-  return <div className="problems">
+  return <div className="problems" tabIndex={-1} aria-label="Problems">
     <div className="problem-summary">{build.state === 'idle' ? 'Build to check your sources.' : 'Build ' + build.state + ' · ' + build.diagnostics.length + ' problems'}</div>
     {build.diagnostics.map((d, i) => <Button key={i} className={'problem-row ' + d.severity} isDisabled={!d.path || !d.range}
       onPress={() => store.run(store.navigate(d, i))}>
@@ -119,6 +124,10 @@ function App() {
   const [entries, setEntries] = useState(new Map<string, DirectoryEntry[]>());
   const [expanded, setExpanded] = useState(new Set<Key>());
   const [selected, setSelected] = useState(new Set<Key>());
+  const [theme, setTheme] = useState<Theme>('dark');
+  const [palette, setPalette] = useState(false);
+  const [commandRows, setCommandRows] = useState<CommandInfo[]>([]);
+  useEffect(() => { document.documentElement.dataset.theme = theme; monaco.editor.setTheme(theme === 'dark' ? 'rune' : theme === 'light' ? 'vs' : 'hc-black'); }, [theme]);
   const [showExcluded, setShowExcluded] = useState(false);
   const [status, setStatus] = useState<ServiceStatus>({ state: 'starting', message: 'Starting service…' });
   const [error, setError] = useState('');
@@ -146,14 +155,15 @@ function App() {
   const persistSession = useRef<() => Promise<void>>(async () => {});
   const [, redraw] = useState(0);
   const [store] = useState(() => new EditorStore(() => redraw(n => n + 1), e => { setError((e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': Error: /, '')); store?.api?.getPanel('output')?.api.setActive(); }));
+  useEffect(() => { if (status.state === 'ready') store.run(window.rune.request<CommandInfo[]>('commands/list').then(setCommandRows)); }, [status.state]);
   const closing = useRef(false);
   const activePath = store.active()?.state.path;
   const busyBuild = savingBuild || build.state === 'running';
-  const documentPaths = [...store.documents.keys()].join('\n');
   const watchPaths = [...new Set([workspace?.path, ...Array.from(expanded, String), ...[...store.documents.values()].filter(d => !d.readOnly).map(d => d.state.path.slice(0, d.state.path.lastIndexOf('/')))].filter((p): p is string => !!p))];
+  const watchKey = JSON.stringify(watchPaths);
   useEffect(() => {
     if (workspace && restored && status.state === 'ready' && !reconnecting) store.run(window.rune.watch(watchPaths, showExcluded));
-  }, [workspace, expanded, documentPaths, showExcluded, restored, status.state, reconnecting]);
+  }, [watchKey, showExcluded, restored, status.state, reconnecting]);
   scan.current = async () => {
     if (!workspace || !restored || status.state !== 'ready' || store.suspended || scanning.current) return;
     const root = workspace.path;
@@ -171,11 +181,11 @@ function App() {
   };
   useEffect(() => window.rune.onFilesChanged(() => store.run(scan.current())), [store]);
   persistSession.current = async () => {
-    if (!workspace || !restoredRef.current || status.state !== 'ready') return;
+    if (!restoredRef.current || status.state !== 'ready') return;
     await window.rune.request('session/save', {
-      workspace: workspace.path,
+      workspace: workspace?.path || null,
       view: store.capture(Array.from(expanded, String), Array.from(selected, String)),
-      settings: { showExcluded, target, toolchain },
+      settings: { showExcluded, target, toolchain, theme },
     });
   };
   const scheduleSession = () => {
@@ -183,7 +193,7 @@ function App() {
     if (restoredRef.current) sessionTimer.current = setTimeout(() => store.run(persistSession.current()), 400);
   };
   store.sessionChanged = scheduleSession;
-  useEffect(() => { scheduleSession(); }, [workspace, expanded, selected, showExcluded, target, toolchain, restored]);
+  useEffect(() => { scheduleSession(); }, [workspace, expanded, selected, showExcluded, target, toolchain, theme, restored]);
   useEffect(() => () => clearTimeout(sessionTimer.current), []);
   useEffect(() => { if (status.state === 'failed') store.suspend(true); }, [status.state, store]);
   useEffect(() => {
@@ -193,6 +203,7 @@ function App() {
       try {
         const session = await window.rune.request<SessionState>('session/load');
         setRecovery(session.recovery);
+        setTheme(session.settings.theme || 'dark');
         setShowExcluded(!!session.settings.showExcluded);
         setTarget(session.settings.target || '');
         if (session.warnings.length) setError(session.warnings.join('\n'));
@@ -228,11 +239,11 @@ function App() {
     return () => { current = false; };
   }, [workspace, activePath, store]);
   useEffect(() => { void window.rune.status().then(setStatus); return window.rune.onStatus(setStatus); }, []);
-  const load = async (path: string, excluded = showExcluded) => {
+  const load = useCallback(async (path: string, excluded = showExcluded) => {
     const ws = workspaceRef.current;
     const rows = await window.rune.request<DirectoryEntry[]>('workspace/list', { path, showExcluded: excluded });
     if (workspaceRef.current === ws) setEntries(previous => new Map(previous).set(path, rows));
-  };
+  }, [showExcluded]);
   const openFolder = () => store.run((async () => {
     if (!restored) return;
     if (busyBuild) throw new Error('Finish or cancel the active build before changing workspace');
@@ -326,7 +337,7 @@ function App() {
     } catch (error) { setFileError((error as Error).message); }
     finally { setFileBusy(false); closing.current = false; store.suspend(status.state !== 'ready'); }
   };
-  const expand = (keys: Set<Key>) => { setExpanded(keys); for (const key of keys) if (!entries.has(String(key))) store.run(load(String(key))); };
+  const expand = useCallback((keys: Set<Key>) => { setExpanded(keys); for (const key of keys) if (!entries.has(String(key))) store.run(load(String(key))); }, [entries, load, store]);
   const reveal = async () => {
     const doc = store.active(); if (!doc || !workspace) return;
     const parents = doc.state.path.slice(workspace.path.length + 1).split('/').slice(0, -1);
@@ -334,7 +345,24 @@ function App() {
     for (const parent of parents) { path += '/' + parent; await load(path); keys.add(path); }
     setExpanded(keys); setSelected(new Set([doc.state.path])); store.api.getPanel('explorer')?.api.setActive();
   };
-  const command = (command: Command) => {
+  const commandContext: CommandContext = { ready: restored && status.state === 'ready' && !store.suspended, busy: busyBuild,
+    building: build.state === 'running', workspace: !!workspace, editor: !!store.active(), readOnly: !!store.active()?.readOnly, documents: !!store.documents.size };
+  const command = (id: Command) => {
+    if (id === 'quit') { execute(id); return; }
+    store.run(window.rune.request<CommandInfo[]>('commands/list', { context: commandContext }).then(rows => {
+      if (rows.find(row => row.id === id)?.enabled) execute(id);
+    }));
+  };
+  const execute = (command: Command) => {
+    if (command.startsWith('zoom-')) store.run(window.rune.zoom(command === 'zoom-reset' ? 0 : command === 'zoom-in' ? 1 : -1));
+    if (command === 'palette') setPalette(true);
+    if (command.startsWith('theme-')) setTheme(command.slice(6) as Theme);
+    if (command === 'close-all') store.run((async () => { for (const panel of [...store.api.panels].filter(p => p.params?.path)) if (!await store.close(panel)) break; })());
+    if (command === 'focus-editor') { const panel = store.activePanel(); panel?.api.setActive(); if (panel) store.editors.get(panel.id)?.focus(); }
+    if (command === 'focus-explorer' || command === 'focus-output' || command === 'focus-problems') {
+      const id = command.slice(6); store.api.getPanel(id)?.api.setActive();
+      requestAnimationFrame(() => (document.querySelector(id === 'explorer' ? '.react-aria-Tree' : '.' + id) as HTMLElement | null)?.focus());
+    }
     if (command === 'build') store.run(startBuild());
     if (command === 'cancel-build') store.run(window.rune.buildCancel());
     if (command === 'open-folder') openFolder();
@@ -368,6 +396,19 @@ function App() {
     } finally { setSavingBuild(false); }
   };
   useEffect(() => window.rune.onCommand(command));
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.repeat || document.querySelector('[role="dialog"]')) return;
+      const primary = /Mac/.test(navigator.platform) ? event.metaKey : event.ctrlKey;
+      const row = commandRows.find(row => {
+        const keys = row.shortcut.toLowerCase().split('+');
+        return !!row.shortcut && primary && !event.altKey && event.shiftKey === keys.includes('shift') && event.key.toLowerCase() === keys.at(-1);
+      });
+      if (row) { event.preventDefault(); event.stopPropagation(); command(row.id); }
+    };
+    window.addEventListener('keydown', keydown, true);
+    return () => window.removeEventListener('keydown', keydown, true);
+  });
   const onReady = (event: DockviewReadyEvent) => {
     store.api = event.api;
     const editor = event.api.addPanel({ id: 'welcome', component: 'welcome', tabComponent: 'fixed', title: 'Welcome' });
@@ -380,6 +421,7 @@ function App() {
   };
   const value: Context = { workspace, entries, expanded, selected, expand, select: setSelected, error, openFolder, store, build, showExcluded, fileAction, saveCopy, toggleExcluded: show => { setShowExcluded(show); refresh(show); }, refresh: () => refresh() };
   return <Workbench.Provider value={value}><div className="application">
+    {palette && <CommandPalette context={commandContext} close={() => setPalette(false)} execute={command} />}
     <ModalOverlay isOpen={!!fileDialog} onOpenChange={open => { if (!open && !fileBusy) setFileDialog(null); }} isDismissable={!fileBusy}>
       <Modal><Dialog aria-label="File operation"><form onSubmit={event => { event.preventDefault(); void mutateFile(); }}>
         <Heading slot="title">{fileDialog?.kind === 'delete' ? 'Move to workspace trash?' : fileDialog?.kind === 'rename' ? 'Rename' : fileDialog?.kind === 'copy' ? 'Save a copy' : 'New ' + fileDialog?.kind}</Heading>
@@ -391,11 +433,12 @@ function App() {
       </form></Dialog></Modal>
     </ModalOverlay>
     <header><div className="brand"><span className="brand-mark">R</span> RUNE <span className="edition">STANDARD ML</span></div><span className="workspace-title">{workspace?.name || 'A place to think in types'}</span>
+      <Button className="toolbar-button" onPress={() => command('palette')} isDisabled={status.state !== 'ready'}>Commands</Button>
       <Button className="toolbar-button" onPress={() => command('reveal')} isDisabled={!store.active()}>Reveal</Button>
       <Button className="toolbar-button" onPress={() => command('split')} isDisabled={!store.active()}>Split editor</Button>
       <Button className="toolbar-button" onPress={() => command('save')} isDisabled={!store.active()}>Save</Button>
       <Button className="toolbar-button" onPress={() => command('save-all')} isDisabled={!store.documents.size}>Save all</Button>
-      <Button className="toolbar-button" onPress={openFolder} isDisabled={!restored || status.state !== 'ready' || busyBuild}>Open folder</Button></header>
+      <Button className="toolbar-button" onPress={() => command('open-folder')} isDisabled={!restored || status.state !== 'ready' || busyBuild}>Open folder</Button></header>
     <div className="build-bar">
       <label>Target <select aria-label="Build target" value={target} onChange={e => setTarget(e.target.value)} disabled={busyBuild}>
         {!targets.length && <option value="">Open a source file or project</option>}{targets.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { BuildStatus, Command, RuneBridge, ServiceStatus } from '../shared/protocol';
 const bridge: RuneBridge = {
   request: (method, params = {}) => ipcRenderer.invoke('rune:request', method, params),
+  zoom: direction => ipcRenderer.invoke('rune:zoom', direction),
   chooseFolder: () => ipcRenderer.invoke('rune:choose-folder'),
   status: () => ipcRenderer.invoke('rune:status'),
   confirmUnsaved: (path) => ipcRenderer.invoke('rune:confirm-unsaved', path),

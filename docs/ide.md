@@ -162,7 +162,9 @@ and toolchain. The renderer supplies Dockview/Monaco view data, bounded to
 256 KiB, while SML validates its version and persists it. View changes are
 coalesced for 400 ms and flushed before an accepted quit. Missing clean files
 are skipped with an error; a missing workspace can be replaced using Open
-Folder. Floating/popout/edge layouts are not restored in this checkpoint.
+Folder. M4.4 also restores floating and edge groups, pruning missing editors;
+saved popouts return as floating groups in the main window. Auxiliary native
+windows remain disabled. See [commands and usability](usability.md).
 
 Each edit acknowledgement follows an atomic journal replacement: private
 0600 file, full write, fsync, rename, and directory fsync on Linux. Journals

@@ -31,7 +31,10 @@ struct
         val () = List.app optionalString ["target", "toolchain"]
         val () = case Json.field value "showExcluded" of Json.Null => () | Json.Bool _ => ()
                  | _ => raise Invalid "showExcluded must be a boolean"
-    in Json.Object (List.map field ["target", "toolchain", "showExcluded"]) end
+    val () = case Json.field value "theme" of Json.Null => ()
+                 | Json.String s => if List.exists (fn t => t = s) ["dark", "light", "contrast"] then () else raise Invalid "unsupported theme"
+                 | _ => raise Invalid "theme must be a string"
+    in Json.Object (List.map field ["target", "toolchain", "showExcluded", "theme"]) end
   fun setWorkspace path =
     let val ws = Json.String path
         val v = if ws = !workspace then !view else Json.Null
@@ -45,7 +48,7 @@ struct
     in view := v; settings := opts; Json.Null end
   fun setToolchain path =
     let val opts = Json.Object [("toolchain", if path = !defaultToolchain then Json.Null else Json.String path), ("target", Json.field (!settings) "target"),
-                               ("showExcluded", Json.field (!settings) "showExcluded")]
+                               ("showExcluded", Json.field (!settings) "showExcluded"), ("theme", Json.field (!settings) "theme")]
         val () = persist (!workspace, !view, opts)
     in settings := opts end
   fun validateDraft data =

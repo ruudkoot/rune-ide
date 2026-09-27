@@ -14,6 +14,7 @@ struct
     else if not (!initialized) then raise Rpc (~32002, "initialize the service first")
     else case method of
       "ping" => params
+    | "commands/list" => Commands.list params
     | "shutdown" => (stopping := true; Json.Null)
     | "workspace/open" => (Build.idle (); Documents.requireClean ();
         let val previous = !Workspace.root

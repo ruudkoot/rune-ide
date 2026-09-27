@@ -7,4 +7,5 @@ src/sml/documents.sml
 src/sml/build.sml
 src/sml/file-events.sml
 src/sml/file-ops.sml
+src/sml/commands.sml
 src/sml/service.sml

@@ -21,7 +21,7 @@ in isolation do not complete a milestone.
 | M1 | Desktop shell connected to an SML service | M0 | complete on Linux |
 | M2 | File browser and source editor | M1 | complete on Linux |
 | M3 | Rune compilation with structured IDE feedback | M2 | complete on Linux |
-| M4 | Reliable daily editing, recovery, and distribution | M3 | M4.1–M4.3 complete on Linux; remaining checkpoints below |
+| M4 | Reliable daily editing, recovery, and distribution | M3 | M4.1–M4.4 implemented and automatically checked on Linux; remaining checkpoints below |
 | M5 | Shared SML presentation logic and interactive compiler services | M3; incremental interfaces where available | not started |
 | M6 | Execution, evaluation, and runtime inspection | M4; M5 for semantic evaluation; runtime prerequisites | not started |
 | M7 | Advanced compiler tools and measured product polish | relevant parts of M4–M6 | not started |
@@ -420,7 +420,7 @@ Split implementation into independently committed checkpoints:
 | M4.1 | Session/preferences, docked layout, dirty journals, recovery and service restart | complete on Linux |
 | M4.2 | File notifications, reload/conflict policy, create/rename/delete | complete on Linux |
 | M4.3 | Self-contained Linux package and clean-environment build loop | complete on Linux |
-| M4.4 | SML command registry/palette, keyboard/accessibility and performance gates | pending |
+| M4.4 | SML command registry/palette, keyboard/accessibility and performance gates | implementation and automated checks complete on Linux; native accessibility checks remain release gates |
 | M4.5 | Native Windows/macOS packages, signing/update and release validation | Windows validation via WSL2 planned; macOS testing deferred by owner |
 
 M4.1 passes the Rune/four-host service suite and packaged Electron tests for
@@ -429,8 +429,12 @@ restart preserving live undo. Recovery write failures, original conflict
 baselines, corrupt state, missing paths and bounded loading are covered.
 See the permanent architecture/protocol documents for guarantees and limits.
 M4.2 adds file notifications/fallback rescans, safe reloads, rename with undo,
-workspace trash and copying missing recovery buffers. Floating/popout/edge
-layout restoration and cross-OS filesystem semantics remain follow-ups. M4 as a whole is not complete.
+workspace trash and copying missing recovery buffers. M4.4 adds the shared SML
+command registry, palette, focus/zoom keys, three persistent themes, virtual
+tree, inactive-editor disposal and floating/edge layout restoration. See
+[usability measurements](../usability.md) for the 5,000-file/64-tab fixture and
+regression budgets. Native accessibility and cross-OS release checks remain;
+M4 as a whole is not complete.
 
 - Add host filesystem notifications; keep refresh/reload/conflict/coalescing
   policy in SML. Rescan after notification overflow or unavailable watching.

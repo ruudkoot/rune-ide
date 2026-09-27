@@ -79,7 +79,7 @@ export class EditorStore {
     if (existing && !split) { existing.api.setActive(); this.update(doc); return existing; }
     const reference = this.activePanel() || this.api.getPanel('welcome') || this.api.panels.find(p => p.params?.path);
     const panel = this.api.addPanel({ id: `document:${++this.serial}`, component: 'editor', tabComponent: 'document', title: path,
-      params: { path: doc.state.path }, renderer: 'always',
+      params: { path: doc.state.path }, renderer: 'onlyWhenVisible',
       ...(reference ? { position: { referencePanel: reference.id, direction: split ? 'right' as const : 'within' as const } } : {}),
     });
     const welcome = this.api.getPanel('welcome'); if (welcome) this.api.removePanel(welcome);
@@ -113,7 +113,7 @@ export class EditorStore {
         if (!await this.prepare(doc)) return false;
         if (!doc.readOnly) await window.rune.request('document/close', { path: doc.state.path, revision: doc.state.revision, discard: true });
         this.api.removePanel(panel); this.viewStates.delete(panel.id);
-        doc.subscription.dispose(); doc.model.dispose(); this.documents.delete(doc.state.path);
+        doc.subscription.dispose(); doc.model.dispose(); this.documents.delete(doc.state.path); this.stalePaths.delete(doc.state.path); this.buildVersions.delete(doc.state.path); this.revealRanges.delete(doc.state.path);
       } finally { doc.closing = false; if (!doc.model.isDisposed()) this.lockDocument(doc, false); }
     } else { this.api.removePanel(panel); this.viewStates.delete(panel.id); }
     this.changed(); return true;
@@ -175,10 +175,11 @@ export class EditorStore {
         if (this.suspended || doc.closing || doc.model.isDisposed()) return;
         const version = doc.model.getVersionId();
         const result = await window.rune.request<{ state: DiskState }>('document/check', { path: doc.state.path, revision: doc.state.revision });
+        const previousDiskState = doc.diskState;
         doc.diskState = result.state;
         if (result.state !== 'same') { monaco.editor.setModelMarkers(doc.model, 'rune', []); this.stalePaths.add(doc.state.path); }
         if (result.state === 'changed' && !this.dirty(doc) && doc.model.getVersionId() === version && !this.suspended) await this.reloadNow(doc, false);
-        this.changed();
+        if (previousDiskState !== doc.diskState) this.changed();
       });
       // Inspection failures must not poison the ordered edit queue.
       doc.queue = task.catch(error => { doc.diskState = 'unreadable'; this.report(error); }).finally(() => { doc.refreshing = false; });
@@ -205,6 +206,7 @@ export class EditorStore {
   }
   capture(expanded: string[], selected: string[]): EditorLayout {
     for (const [id, editor] of this.editors) { const view = editor.saveViewState(); if (view) this.viewStates.set(id, view); }
+    for (const id of this.viewStates.keys()) if (!this.api.getPanel(id)) this.viewStates.delete(id);
     return { version: 1, layout: this.api.toJSON(), viewStates: Object.fromEntries(this.viewStates), expanded, selected };
   }
   async restore(raw: unknown, pendingPaths: string[] = []) {
@@ -230,10 +232,21 @@ export class EditorStore {
       if (!node.data.views.includes(node.data.activeView || '')) node.data.activeView = node.data.views[0];
       return node.data.views.length > 0;
     };
-    if (!prune(layout.grid.root)) return;
-    // Popout windows have a separate lifecycle; restore those panels in the main window later.
-    if (layout.popoutGroups?.length || layout.floatingGroups?.length || layout.edgeGroups) {
-      throw new Error('The saved auxiliary-window layout could not be restored; sources remain recoverable');
+    prune(layout.grid.root);
+    // Floating and edge groups share the main document. Recover old popouts as
+    // floating groups because native auxiliary windows are intentionally disabled.
+    const pruneGroup = (group: { views: string[]; activeView?: string }) => {
+      group.views = group.views.filter(id => layout.panels[id]);
+      if (!group.views.includes(group.activeView || '')) group.activeView = group.views[0];
+      return group.views.length > 0;
+    };
+    layout.floatingGroups = [...(layout.floatingGroups || []), ...(layout.popoutGroups || []).map(group => ({
+      data: group.data, grid: group.grid, position: { left: 40, top: 40, width: 600, height: 400 },
+    }))].filter(group => group.grid ? prune(group.grid.root) : group.data ? pruneGroup(group.data) : false);
+    delete layout.popoutGroups;
+    if (layout.edgeGroups) for (const key of ['top', 'bottom', 'left', 'right'] as const) {
+      const group = layout.edgeGroups[key]?.group as { views: string[]; activeView?: string } | undefined;
+      if (group && (!Array.isArray(group.views) || !pruneGroup(group))) delete layout.edgeGroups[key];
     }
     for (const [id, state] of Object.entries(view.viewStates || {})) if (layout.panels[id]) this.viewStates.set(id, state);
     this.api.fromJSON(layout);

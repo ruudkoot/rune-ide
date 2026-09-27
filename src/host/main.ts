@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron';
 import path from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { CommandInfo } from '../shared/protocol';
 import { ServiceClient } from './service-client';
 import { BuildHost } from './build-host';
 import { WorkspaceWatcher } from './workspace-watcher';
@@ -12,7 +13,7 @@ let quitting = false;
 let acceptedClose = false;
 let builds: BuildHost;
 let watcher: WorkspaceWatcher;
-const methods = new Set(['ping', 'workspace/open', 'workspace/list', 'workspace/changes', 'file/create', 'file/copy', 'file/rename', 'file/delete', 'document/open', 'document/change', 'document/check', 'document/reload', 'document/save', 'document/close', 'document/list', 'document/attach', 'build/targets', 'diagnostic/open', 'session/load', 'session/save', 'recovery/restore', 'recovery/discard']);
+const methods = new Set(['ping', 'commands/list', 'workspace/open', 'workspace/list', 'workspace/changes', 'file/create', 'file/copy', 'file/rename', 'file/delete', 'document/open', 'document/change', 'document/check', 'document/reload', 'document/save', 'document/close', 'document/list', 'document/attach', 'build/targets', 'diagnostic/open', 'session/load', 'session/save', 'recovery/restore', 'recovery/discard']);
 if (process.env.RUNE_IDE_USER_DATA) {
   const userData = path.resolve(process.env.RUNE_IDE_USER_DATA);
   mkdirSync(userData, { recursive: true, mode: 0o700 });
@@ -47,6 +48,8 @@ if (primaryInstance) app.whenReady().then(() => {
     webPreferences: { preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY, contextIsolation: true, nodeIntegration: false, sandbox: true,
       backgroundThrottling: !backgroundTest, offscreen: backgroundTest },
   });
+  // The renderer handles registry shortcuts so Monaco cannot shadow workbench keys.
+  window.webContents.setIgnoreMenuShortcuts(true);
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.on('close', (event) => {
     if (!acceptedClose) { event.preventDefault(); window.webContents.send('rune:command', 'quit'); }
@@ -66,6 +69,10 @@ if (primaryInstance) app.whenReady().then(() => {
   ipcMain.handle('rune:watch', async (event, params: unknown) => {
     checkSender(event); await service.ready;
     watcher.configure(await service.request('workspace/watch', params) as string[]);
+  });
+  ipcMain.handle('rune:zoom', (event, direction: unknown) => {
+    checkSender(event); if (direction !== -1 && direction !== 0 && direction !== 1) throw new Error('Invalid zoom direction');
+    window.webContents.setZoomFactor(direction === 0 ? 1 : Math.max(0.5, Math.min(2, window.webContents.getZoomFactor() + direction * 0.1)));
   });
   ipcMain.handle('rune:choose-folder', async (event) => {
     checkSender(event);
@@ -118,25 +125,16 @@ if (primaryInstance) app.whenReady().then(() => {
     acceptedClose = true; app.quit();
   });
   const command = (name: string) => () => window.webContents.send('rune:command', name);
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: 'File', submenu: [
-      { label: 'Open Folder…', accelerator: 'CmdOrCtrl+O', click: command('open-folder') },
-      { label: 'Save', accelerator: 'CmdOrCtrl+S', click: command('save') },
-      { label: 'Save All', accelerator: 'CmdOrCtrl+Shift+S', click: command('save-all') },
-      { label: 'Close Editor', accelerator: 'CmdOrCtrl+W', click: command('close') },
-      { role: 'quit' },
-    ] },
-    { role: 'editMenu' },
-    { label: 'Build', submenu: [
-      { label: 'Save and Build', accelerator: 'CmdOrCtrl+Shift+B', click: command('build') },
-      { label: 'Cancel Build', click: command('cancel-build') },
-    ] },
-    { label: 'View', submenu: [
-      { label: 'Split Editor', accelerator: 'CmdOrCtrl+\\', click: command('split') },
-      { label: 'Reveal Active File', click: command('reveal') },
-      { role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
-    ] },
-  ]));
+  // Native labels and accelerators come from the same SML registry as the palette.
+  void service.ready.then(async () => {
+    const rows = await service.request('commands/list') as CommandInfo[];
+    const section = (label: string): Electron.MenuItemConstructorOptions => ({ label, submenu: rows.filter(row => row.category === label).map(row => ({ label: row.label, accelerator: row.shortcut || undefined, click: command(row.id) })) });
+    Menu.setApplicationMenu(Menu.buildFromTemplate([
+      ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
+      section('File'), { role: 'editMenu' }, section('Build'), section('View'),
+      { label: 'Window', submenu: [{ role: 'toggleDevTools' }, { role: 'quit' }] },
+    ]));
+  }).catch(() => { /* The service failure banner supplies restart and exit. */ });
   void window.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 });
 app.on('window-all-closed', () => app.quit());

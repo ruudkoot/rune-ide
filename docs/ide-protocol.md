@@ -102,7 +102,7 @@ Session policy errors use `-32040`; OS failures remain `-32000`.
 
 `workspace` is a canonical root or null. `view` is null or a version-1 opaque
 renderer object (at most 256 KiB). `settings` contains optional/null `target`,
-`toolchain`, and `showExcluded`. The host supplies `defaultToolchain` at
+`toolchain`, `showExcluded`, and `theme` (`dark`, `light`, `contrast`). The host supplies `defaultToolchain` at
 initialization; saving that exact path stores null, so the bundled toolchain
 follows a relocated package. Explicit external toolchains keep their paths.
 A supplied workspace in `session/save` must
@@ -153,3 +153,13 @@ existing destinations. Rename preserves document revisions and remaps path
 prefixes in SML. Delete moves content into workspace trash and removes its
 active document records. Copy writes new content exclusively and retains the
 original record. See the architecture document for limitations and retention.
+
+## Commands (M4.4)
+
+`commands/list` accepts `{query?, context?}` and returns records
+`{id, label, category, shortcut, enabled}`. The optional context contains
+boolean `ready`, `busy`, `building`, `workspace`, `editor`, `readOnly`, and
+`documents` flags from the renderer. Search is limited to 256 UTF-8 bytes;
+all whitespace-separated terms must match label/category/ID, ignoring ASCII
+case. Availability guides presentation; mutating operations still validate
+the authoritative SML state. Host and renderer share the same registry.
